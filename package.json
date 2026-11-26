@@ -1,0 +1,18 @@
+{
+  "name": "ai-anthropic-proxy",
+  "version": "1.0.0",
+  "description": "Local Anthropic Messages API proxy backed by Devin CLI ACP (devin acp) for Claude Desktop and Claude Code.",
+  "type": "module",
+  "license": "MIT",
+  "private": true,
+  "bin": {
+    "ai-anthropic-proxy": "./src/index.mjs"
+  },
+  "scripts": {
+    "start": "node ./src/index.mjs",
+    "test": "node --test ./test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
