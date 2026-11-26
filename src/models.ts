@@ -20,10 +20,92 @@ const EFFORT_SCALE: readonly ThoughtLevel[] = ["none", "minimal", "low", "medium
 const EFFORT_SUFFIX_RE = /-(none|minimal|low|medium|high|xhigh|max)$/i;
 const SPEED_SUFFIX_RE = /-(lightning|ultrafast|fast)$/i;
 
+const GATEWAY_ALIAS_PREFIX = "claude-fable-acp-";
+const GATEWAY_SAFE_HEX_PREFIX = "h-";
+const SAFE_HEX_ALPHABET = "0123456789cfjquw";
+const CLAUDE_TIER_KEYWORDS = ["sonnet", "opus", "haiku", "fable", "mythos"] as const;
+const CLAUDE_ALLOWED_KEYWORDS = ["claude", ...CLAUDE_TIER_KEYWORDS, "anthropic"] as const;
+const GATEWAY_TIER_EXACT_RE = /^(sonnet|opus|haiku|fable|mythos)(-[\d.]+)?$/;
+const NON_ANTHROPIC_BLOCKLIST_RE =
+  /ark-code|astron|command-r|deepseek|doubao|gemini|gemma|glm|gpt|grok|hermes|hy3|kimi|lfm|\bling\b|llama|longcat|mimo|minimax|mistral|mixtral|moonshot|nemotron|openai|phi-|qianfan|qwen|tc-code|\bunic\b|yi-|stepfun|step-3|seed-|bytedance|hunyuan|granite|amazon\.nova|nova-|devstral|ministral|ernie|codex|arcee|trinity|abab|phi\d|\bk2\.|\bm2\.|jamba|arctic|solar|mercury|zamba|kat-coder|\bds-|dpsk/;
+
 export interface ResolvedModelSelection {
   model: DevinModelEntry;
   requestedEffort: ThoughtLevel | null;
   requestedSpeed: SpeedMode | null;
+}
+
+/**
+ * Check whether a model ID passes Claude Desktop Gateway's Anthropic-only route filter.
+ */
+export function isClaudeDesktopCompatibleId(id: string): boolean {
+  const lower = id.trim().toLowerCase();
+  if (!lower || NON_ANTHROPIC_BLOCKLIST_RE.test(lower)) return false;
+  return GATEWAY_TIER_EXACT_RE.test(lower) || CLAUDE_ALLOWED_KEYWORDS.some((kw) => lower.includes(kw));
+}
+
+function encodeSafeHex(input: string): string {
+  const bytes = Buffer.from(input, "utf8");
+  let out = "";
+  for (const byte of bytes) {
+    out += SAFE_HEX_ALPHABET[(byte >> 4) & 0x0f]! + SAFE_HEX_ALPHABET[byte & 0x0f]!;
+  }
+  return out;
+}
+
+function decodeSafeHex(encoded: string): string | null {
+  if (!encoded || encoded.length % 2 !== 0) return null;
+  const bytes = Buffer.alloc(encoded.length / 2);
+  for (let i = 0; i < encoded.length; i += 2) {
+    const hi = SAFE_HEX_ALPHABET.indexOf(encoded[i]!);
+    const lo = SAFE_HEX_ALPHABET.indexOf(encoded[i + 1]!);
+    if (hi < 0 || lo < 0) return null;
+    bytes[i / 2] = (hi << 4) | lo;
+  }
+  return bytes.toString("utf8");
+}
+
+/**
+ * Convert a non-Anthropic Devin model ID into a lossless Claude Desktop Gateway alias.
+ * Uses the `claude-fable-acp-` prefix so Claude Desktop admits it and enables effort controls.
+ */
+export function toGatewayModelId(nativeId: string): string {
+  if (isClaudeDesktopCompatibleId(nativeId)) return nativeId;
+
+  if (!nativeId.includes("--") && /^[a-z0-9._-]+$/.test(nativeId)) {
+    let body = nativeId;
+    for (let step = 0; step < 32 && NON_ANTHROPIC_BLOCKLIST_RE.test(body); step += 1) {
+      const next = body.replace(NON_ANTHROPIC_BLOCKLIST_RE, (match) => `${match[0]}--${match.slice(1)}`);
+      if (next === body) break;
+      body = next;
+    }
+
+    const readable = `${GATEWAY_ALIAS_PREFIX}${body}`;
+    if (
+      readable.length <= 245 &&
+      !body.startsWith(GATEWAY_SAFE_HEX_PREFIX) &&
+      isClaudeDesktopCompatibleId(readable) &&
+      decodeGatewayModelId(readable) === nativeId
+    ) {
+      return readable;
+    }
+  }
+
+  return `${GATEWAY_ALIAS_PREFIX}${GATEWAY_SAFE_HEX_PREFIX}${encodeSafeHex(nativeId)}`;
+}
+
+/**
+ * Decode a proxy-generated Claude Desktop Gateway alias back to its original Devin ID.
+ */
+export function decodeGatewayModelId(id: string): string | null {
+  const trimmed = id.trim();
+  if (!trimmed.toLowerCase().startsWith(GATEWAY_ALIAS_PREFIX)) return null;
+  const body = trimmed.slice(GATEWAY_ALIAS_PREFIX.length);
+  if (!body) return null;
+  if (body.toLowerCase().startsWith(GATEWAY_SAFE_HEX_PREFIX)) {
+    return decodeSafeHex(body.slice(GATEWAY_SAFE_HEX_PREFIX.length).toLowerCase());
+  }
+  return body.replaceAll("--", "");
 }
 
 /**
@@ -124,6 +206,11 @@ function stripTrailingEffort(id: string): string {
   return id.replace(EFFORT_SUFFIX_RE, "");
 }
 
+function lookupModelMap(raw: string, modelMap: Record<string, string>): string | undefined {
+  if (!raw) return undefined;
+  return modelMap[raw] ?? modelMap[raw.toLowerCase()];
+}
+
 /**
  * Resolve requested model string to a Devin ACP base model ID plus optional effort/speed hints.
  */
@@ -136,7 +223,11 @@ export function resolveDevinModelWithHints(
   const modelMap = options.modelMap ?? {};
 
   const raw = typeof requestedModel === "string" ? requestedModel.trim() : "";
-  const mappedRaw = (raw && (modelMap[raw] ?? modelMap[raw.toLowerCase()])) || raw;
+  const strippedRaw1m = raw.replace(/\[1m\]$/i, "").trim();
+  const mappedRaw =
+    lookupModelMap(raw, modelMap) ??
+    (strippedRaw1m !== raw ? lookupModelMap(strippedRaw1m, modelMap) : undefined) ??
+    raw;
 
   if (!mappedRaw) {
     return {
@@ -161,12 +252,20 @@ export function resolveDevinModelWithHints(
     if (exact) {
       return { model: exact, requestedEffort: null, requestedSpeed: null };
     }
+    const decoded = decodeGatewayModelId(candidate);
+    if (decoded) {
+      const exactDecoded = findCatalogModel(decoded, catalogModels);
+      if (exactDecoded) {
+        return { model: exactDecoded, requestedEffort: null, requestedSpeed: null };
+      }
+    }
   }
 
   const mapped = candidates[candidates.length - 1] ?? mappedRaw;
-  const { baseSlug, effort, speed } = peelEffortAndSpeedSuffixes(mapped);
+  const effectiveSlug = decodeGatewayModelId(mapped) ?? mapped;
+  const { baseSlug, effort, speed } = peelEffortAndSpeedSuffixes(effectiveSlug);
 
-  if (baseSlug && baseSlug !== mapped) {
+  if (baseSlug && baseSlug !== effectiveSlug) {
     const exactBase = findCatalogModel(baseSlug, catalogModels);
     if (exactBase) {
       return { model: exactBase, requestedEffort: effort, requestedSpeed: speed };
@@ -181,7 +280,7 @@ export function resolveDevinModelWithHints(
     }
   }
 
-  const searchSlug = baseSlug || mapped;
+  const searchSlug = baseSlug || effectiveSlug;
   const lower = searchSlug.toLowerCase();
 
   if (lower.includes("haiku")) {
@@ -210,7 +309,7 @@ export function resolveDevinModelWithHints(
 
   if (catalogModels.length === 0) {
     return {
-      model: { id: mapped, name: mapped, supportsImages: true },
+      model: { id: effectiveSlug, name: effectiveSlug, supportsImages: true },
       requestedEffort: effort,
       requestedSpeed: speed,
     };
@@ -392,18 +491,23 @@ function inferMaxInputTokens(id: string): number {
 export function formatAnthropicModelsList(
   catalogModels: readonly DevinModelEntry[],
   defaultModel: string,
+  options: { gatewayAliases?: boolean } = {},
 ): AnthropicModelsListResponse {
+  const useGatewayAliases = options.gatewayAliases !== false;
   const list: readonly DevinModelEntry[] =
     catalogModels.length > 0
       ? catalogModels
       : [{ id: defaultModel, name: defaultModel, supportsImages: true }];
 
   const data: AnthropicModelInfo[] = list.map((model) => {
+    const exposedId = useGatewayAliases ? toGatewayModelId(model.id) : model.id;
+    const aliased = exposedId !== model.id;
     const line = inferModelLine(model.id);
     return {
       type: "model",
-      id: model.id,
+      id: exposedId,
       display_name: model.name,
+      ...(aliased ? { description: `Devin: ${model.id}`.slice(0, 100) } : {}),
       created_at: CREATED_AT_ISO,
       max_input_tokens: inferMaxInputTokens(model.id),
       max_tokens: 64_000,

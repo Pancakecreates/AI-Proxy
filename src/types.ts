@@ -19,6 +19,7 @@ export interface ProxyConfig {
   processModel: ProcessModel;
   apiKey: string | null;
   modelMap: Record<string, string>;
+  gatewayAliases: boolean;
   requestTimeoutMs: number;
   startupTimeoutMs: number;
   idleSessionTtlMs: number;
@@ -141,6 +142,7 @@ export interface AnthropicModelInfo {
   type: "model";
   id: string;
   display_name: string;
+  description?: string;
   created_at: string;
   max_input_tokens: number;
   max_tokens: number;

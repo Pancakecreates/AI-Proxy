@@ -91,6 +91,10 @@ export function parseCliArgs(argv: readonly string[]): Record<string, string | b
       args.help = true;
       continue;
     }
+    if (token.startsWith("--no-")) {
+      args[token.slice(5)] = "false";
+      continue;
+    }
     if (!token.startsWith("--")) continue;
     const eq = token.indexOf("=");
     const key = eq >= 0 ? token.slice(2, eq) : token.slice(2);
@@ -171,6 +175,7 @@ export function loadConfig(argv: readonly string[] = process.argv.slice(2)): Pro
     processModel,
     apiKey: (cliString(cli, "api-key") ?? process.env.PROXY_API_KEY ?? "").trim() || null,
     modelMap: parseJsonMap(process.env.DEVIN_MODEL_MAP),
+    gatewayAliases: parseBoolEnv(cliString(cli, "gateway-aliases") ?? process.env.DEVIN_GATEWAY_ALIASES, true),
     requestTimeoutMs: parseIntEnv(cliString(cli, "request-timeout-ms") ?? process.env.DEVIN_REQUEST_TIMEOUT_MS, 600_000),
     startupTimeoutMs: parseIntEnv(cliString(cli, "startup-timeout-ms") ?? process.env.DEVIN_STARTUP_TIMEOUT_MS, 45_000),
     idleSessionTtlMs: parseIntEnv(cliString(cli, "idle-ttl-ms") ?? process.env.DEVIN_IDLE_SESSION_TTL_MS, 30 * 60_000),
@@ -199,6 +204,7 @@ Options:
   --process-model <mode>     Devin process model: in-process | daemon (default: in-process)
   --devin-path <path>        Explicit path to devin executable (env: DEVIN_PATH)
   --api-key <key>            Require Bearer / x-api-key auth (optional, env: PROXY_API_KEY)
+  --no-gateway-aliases       Serve raw non-Claude IDs in /v1/models (env: DEVIN_GATEWAY_ALIASES=false)
   --debug                    Verbose ACP/HTTP debug logs (env: DEVIN_PROXY_DEBUG=1)
 `;
 }

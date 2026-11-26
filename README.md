@@ -51,6 +51,7 @@ Double-click or run `start-proxy.bat` (automatically runs `npm install` and `npm
 | `DEVIN_PROCESS_MODEL` / `--process-model` | `in-process` | Devin process model: `in-process` or `daemon` |
 | `PROXY_API_KEY` / `--api-key` | — | Optional API key (`x-api-key` or `Authorization: Bearer ...`) |
 | `DEVIN_MODEL_MAP` | `{}` | JSON map from client model ID to Devin model ID |
+| `DEVIN_GATEWAY_ALIASES` / `--no-gateway-aliases` | `true` | Expose non-Claude Devin models under Claude Desktop Gateway-compatible IDs in `/v1/models` (`?raw=1` disables per request) |
 
 ## Connect to Claude Desktop
 
@@ -61,14 +62,10 @@ Double-click or run `start-proxy.bat` (automatically runs `npm install` and `npm
    - **Gateway Base URL**: `http://127.0.0.1:8787`
    - **API Key**: your `PROXY_API_KEY` from `.env` (or any string if `PROXY_API_KEY` is unset)
 
-### Using non-Claude models & specific efforts (e.g. DeepSeek, Gemini, GPT, SWE)
+### Using all 121+ models (DeepSeek, GPT, Gemini, SWE, Kimi, GLM, Grok, Claude)
 
-- **Auto-discovery:** Leave *Override the auto-discovered model list* off so Claude Desktop queries `GET /v1/models`, then pick efforts via Claude's effort slider (`output_config.effort`).
-- **Manual model list in Claude Desktop:** Turn on *Override the auto-discovered model list* and fill:
-  - **Model ID**: `deepseek-v4-pro-high` (or effort-pinned like `deepseek-v4-pro-max`, `swe-2-1-xhigh`, `swe-2-1-xhigh-lightning`)
-  - **Display name**: `DeepSeek V4 Pro`
-  - **Claude model behind this ID**: `claude-sonnet-4-6` (used only by Claude Desktop UI for effort levels and limits; the proxy routes `Model ID` directly to DeepSeek in Devin)
-- **Custom mapping (`DEVIN_MODEL_MAP`):** Map any Claude ID in `.env` (for example `DEVIN_MODEL_MAP={"claude-opus-4":"deepseek-v4-pro-max"}`).
+- **Automatic Model discovery (recommended):** Keep **Model discovery** on and **Model list** empty. Because Claude Desktop filters `/v1/models` to Anthropic-looking route IDs and rejects names like `deepseek`, `gpt`, `gemini`, `glm`, `kimi`, `grok`, or `nemotron`, the proxy automatically exposes non-Claude models under reversible `claude-fable-acp-...` gateway aliases while keeping their real `display_name` (such as `DeepSeek V4 Pro`, `GPT-6.2 Astra`, `Gemini 4 Neon`, `SWE-2.1`) and decoding incoming requests (including `[1m]` variants) back to the exact Devin model. Pass `?raw=1` to `/v1/models` or set `DEVIN_GATEWAY_ALIASES=false` (`--no-gateway-aliases`) for raw IDs.
+- **Custom mapping (`DEVIN_MODEL_MAP`):** Map any Claude Desktop-compatible ID in `.env` (for example `DEVIN_MODEL_MAP={"anthropic/dp-v4-pro-high":"deepseek-v4-pro-high"}`) if adding custom entries in **Model list**.
 
 ## Connect to Claude Code
 

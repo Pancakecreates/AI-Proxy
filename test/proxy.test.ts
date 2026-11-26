@@ -6,12 +6,15 @@ import { join } from "node:path";
 import test from "node:test";
 import { AcpClient } from "../src/acp-client.js";
 import {
+  decodeGatewayModelId,
   fitSupportedEffort,
   formatAnthropicModelsList,
+  isClaudeDesktopCompatibleId,
   parseConfigCatalog,
   resolveDevinModelWithHints,
   resolveSpeed,
   resolveThoughtLevel,
+  toGatewayModelId,
 } from "../src/models.js";
 import { createProxyServer } from "../src/server.js";
 import { SessionManager } from "../src/sessions.js";
@@ -240,8 +243,47 @@ test("model catalog parsing and resolution handles exact, Anthropic aliases, Dee
   assert.equal(formatted.data.length, 7);
   assert.equal(formatted.data[0]?.type, "model");
   assert.equal(formatted.data[5]?.max_input_tokens, 1_000_000);
+  assert.equal(formatted.data[1]?.id, "claude-opus-5-5-medium");
   assert.equal(formatted.data[1]?.line, "opus");
+  assert.equal(isClaudeDesktopCompatibleId(formatted.data[0]!.id), true);
+  assert.equal(isClaudeDesktopCompatibleId(formatted.data[4]!.id), true);
+  assert.equal(isClaudeDesktopCompatibleId(formatted.data[5]!.id), true);
+  assert.equal(formatted.data[5]?.display_name, "DeepSeek V4 Pro");
   assert.equal(formatted.has_more, false);
+
+  const formattedRaw = formatAnthropicModelsList(catalog.models, "swe-2-1-medium", { gatewayAliases: false });
+  assert.equal(formattedRaw.data[5]?.id, "deepseek-v4-pro-high");
+
+  // Gateway alias encoding & decoding (including [1m], -max suffixes, safe-hex fallback, and DEVIN_MODEL_MAP [1m])
+  for (const id of [
+    "swe-2-1-medium",
+    "gemini-4-carbon-medium",
+    "deepseek-v4-pro-high",
+    "gpt-6-2-astra-medium",
+    "kimi-k3-1-pro-max",
+    "glm-5-3-max",
+    "grok-4-7-medium",
+    "nemotron-3-5-super-high",
+    "fusion-claude-opus-5-5-medium-sidekick-gpt-6-luna-high",
+    "custom--double-dash-qwen-codex",
+  ]) {
+    const alias = toGatewayModelId(id);
+    assert.equal(isClaudeDesktopCompatibleId(alias), true, `Alias should pass Claude Desktop filter: ${alias}`);
+    assert.equal(decodeGatewayModelId(alias), id);
+  }
+
+  const dsAlias = toGatewayModelId("deepseek-v4-pro-high");
+  assert.equal(resolveDevinModelWithHints(`${dsAlias}[1m]`, catalog.models).model.id, "deepseek-v4-pro-high");
+  const dsAliasMax = toGatewayModelId("deepseek-v4-pro-max");
+  const resolvedAliasMax = resolveDevinModelWithHints(dsAliasMax, catalog.models);
+  assert.equal(resolvedAliasMax.model.id, "deepseek-v4-pro-high");
+  assert.equal(resolvedAliasMax.requestedEffort, "max");
+  assert.equal(
+    resolveDevinModelWithHints("anthropic/dp-v4-pro-high[1m]", catalog.models, {
+      modelMap: { "anthropic/dp-v4-pro-high": "deepseek-v4-pro-high" },
+    }).model.id,
+    "deepseek-v4-pro-high",
+  );
 });
 
 test("end-to-end Anthropic server over fake ACP handles per-model efforts, output_config.effort, speed suffixes, SSE, and permissions", async () => {
@@ -261,6 +303,7 @@ test("end-to-end Anthropic server over fake ACP handles per-model efforts, outpu
     processModel: "in-process",
     apiKey: "secret-key",
     modelMap: {},
+    gatewayAliases: true,
     requestTimeoutMs: 10_000,
     startupTimeoutMs: 10_000,
     idleSessionTtlMs: 60_000,
@@ -286,6 +329,15 @@ test("end-to-end Anthropic server over fake ACP handles per-model efforts, outpu
     assert.equal(modelsRes.status, 200);
     const modelsJson = (await modelsRes.json()) as AnthropicModelsListResponse;
     assert.equal(modelsJson.data.length, 5);
+    for (const m of modelsJson.data) {
+      assert.equal(isClaudeDesktopCompatibleId(m.id), true, `GET /v1/models exposed incompatible ID: ${m.id}`);
+    }
+
+    const rawModelsRes = await fetch(`${baseUrl}/v1/models?raw=1`, {
+      headers: { "x-api-key": "secret-key" },
+    });
+    const rawModelsJson = (await rawModelsRes.json()) as AnthropicModelsListResponse;
+    assert.ok(rawModelsJson.data.some((m) => m.id === "deepseek-v4-pro-high"));
 
     const countRes = await fetch(`${baseUrl}/v1/messages/count_tokens`, {
       method: "POST",
@@ -361,6 +413,22 @@ test("end-to-end Anthropic server over fake ACP handles per-model efforts, outpu
     assert.equal(dsRes.status, 200);
     const dsJson = (await dsRes.json()) as { content: Array<{ text?: string }> };
     assert.match(dsJson.content[1]?.text ?? "", /model=deepseek-v4-pro-high mode=bypass thought=max/);
+
+    // 3b. Claude Desktop Gateway aliased DeepSeek with [1m] + effort=max routes back to deepseek-v4-pro-high
+    const dsGatewayId = modelsJson.data.find((m) => m.display_name === "DeepSeek V4 Pro")?.id;
+    assert.ok(dsGatewayId);
+    const dsAliasRes = await fetch(`${baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: { "x-api-key": "secret-key", "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: `${dsGatewayId}[1m]`,
+        output_config: { effort: "max" },
+        messages: [{ role: "user", content: "hi gateway deepseek" }],
+      }),
+    });
+    assert.equal(dsAliasRes.status, 200);
+    const dsAliasJson = (await dsAliasRes.json()) as { content: Array<{ text?: string }> };
+    assert.match(dsAliasJson.content[1]?.text ?? "", /model=deepseek-v4-pro-high mode=bypass thought=max/);
 
     // 4. Permission auto-approval
     const permRes = await fetch(`${baseUrl}/v1/messages`, {

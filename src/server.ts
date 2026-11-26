@@ -117,10 +117,17 @@ export function createProxyServer(deps: {
     if (req.method === "GET" && (path === "/v1/models" || path === "/models")) {
       try {
         const refresh = url.searchParams.get("refresh") === "1";
+        const rawIds = url.searchParams.get("raw") === "1";
         if (refresh || sessions.catalog.models.length === 0) {
           await sessions.warmUp(refresh);
         }
-        sendJson(res, 200, formatAnthropicModelsList(sessions.catalog.models, config.defaultModel));
+        sendJson(
+          res,
+          200,
+          formatAnthropicModelsList(sessions.catalog.models, config.defaultModel, {
+            gatewayAliases: config.gatewayAliases && !rawIds,
+          }),
+        );
       } catch (err) {
         const message = err instanceof Error ? err.message : "Failed to load models from devin acp.";
         sendAnthropicError(res, 502, "api_error", message);
