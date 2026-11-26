@@ -1,14 +1,14 @@
 # AI-Anthropic-Proxy
 
-Local Anthropic Messages API (`GET /v1/models`, `POST /v1/messages`, `POST /v1/messages/count_tokens`) proxy backed by Cognition Devin CLI over ACP (`devin acp`). Built with zero-dependency **Node.js** ESM so you can connect Claude Desktop (Third-Party Inference) or Claude Code directly to your local Devin agent and any model in your Devin account (Claude, DeepSeek, GPT, Gemini, SWE, Grok, Kimi, GLM).
+Local Anthropic Messages API (`GET /v1/models`, `POST /v1/messages`, `POST /v1/messages/count_tokens`) proxy backed by Cognition Devin CLI over ACP (`devin acp`). Written in strict **TypeScript** for **Node.js** so you can connect Claude Desktop (Third-Party Inference) or Claude Code directly to your local Devin agent and any model in your Devin account (Claude, DeepSeek, GPT, Gemini, SWE, Grok, Kimi, GLM).
 
 ## Features
 
-- **Anthropic Messages API compatible** — implements `POST /v1/messages` (streaming SSE with `ping` keepalive + `thinking` blocks, and non-streaming JSON), `GET /v1/models`, and `POST /v1/messages/count_tokens`.
+- **TypeScript codebase** — strictly typed ACP JSON-RPC 2.0 client, Anthropic Messages API handler, and session manager (`src/*.ts` -> `dist/*.js`).
+- **Anthropic Messages API compatible** — implements `POST /v1/messages` (streaming SSE with `ping` keepalive + `thinking` blocks, and non-streaming JSON), `GET /v1/models` (with `max_input_tokens`, `max_tokens`, `capabilities`, `line`), and `POST /v1/messages/count_tokens`.
 - **Any model via Devin ACP** — automatically discovers your full Devin model catalog (`121+` models) and resolves exact IDs, `[1m]` suffixes, Anthropic aliases (`claude-opus-*`, `claude-sonnet-*`, `claude-haiku-*`), fuzzy names (`deepseek`, `gemini`, `swe`), or custom `DEVIN_MODEL_MAP` overrides.
 - **Stateful session continuation** — matches incoming stateless `messages[]` prefixes onto open Devin ACP sessions and switches models/thinking levels dynamically via `session/set_config_option`.
 - **Hands-free local execution** — automatically handles `session/request_permission`, `session/create_elicitation`, `session/cancel` on client abort, and forced `session/close` (`cognition.ai/force`).
-- **Zero dependencies** — runs directly on Node.js >= 20.
 
 ## Requirements
 
@@ -20,11 +20,21 @@ Local Anthropic Messages API (`GET /v1/models`, `POST /v1/messages`, `POST /v1/m
 ```bash
 git clone https://github.com/Pancakecreates/AI-Anthropic-Proxy.git
 cd AI-Anthropic-Proxy
+npm install
 cp .env.example .env
+npm run build
 npm start
 ```
 
-On Windows you can also run `start-proxy.bat`.
+### Development mode (no build step)
+
+```bash
+npm run dev
+```
+
+### Windows quick start
+
+Double-click or run `start-proxy.bat` (automatically runs `npm install` and `npm run build` on first launch, then starts `node dist/index.js`).
 
 ## Configuration
 
@@ -52,14 +62,12 @@ On Windows you can also run `start-proxy.bat`.
 
 ### Using non-Claude models (e.g. DeepSeek, Gemini, GPT, SWE)
 
-You can use **any** model supported by your Devin account:
-
-- **Option A (Auto-discovery):** Leave *Override the auto-discovered model list* off so Claude Desktop fetches `/v1/models`.
-- **Option B (Manual model list in Claude Desktop):** Turn on *Override the auto-discovered model list* and fill:
+- **Auto-discovery:** Leave *Override the auto-discovered model list* off so Claude Desktop queries `GET /v1/models`.
+- **Manual model list in Claude Desktop:** Turn on *Override the auto-discovered model list* and fill:
   - **Model ID**: `deepseek-v4-pro-high` (or `deepseek-v4-1-flash-1017-high`, `gemini-4-carbon-medium`, `gpt-6-2-astra-medium`, `swe-2-1-medium`)
   - **Display name**: `DeepSeek V4 Pro`
-  - **Claude model behind this ID**: `claude-sonnet-4-6` (used only by Claude Desktop UI for effort levels and limits; the proxy still routes `Model ID` directly to DeepSeek in Devin)
-- **Option C (`DEVIN_MODEL_MAP`):** Map any Claude ID in `.env` (for example `DEVIN_MODEL_MAP={"claude-opus-4":"deepseek-v4-pro-high"}`).
+  - **Claude model behind this ID**: `claude-sonnet-4-6` (used only by Claude Desktop UI for effort levels and limits; the proxy routes `Model ID` directly to DeepSeek in Devin)
+- **Custom mapping (`DEVIN_MODEL_MAP`):** Map any Claude ID in `.env` (for example `DEVIN_MODEL_MAP={"claude-opus-4":"deepseek-v4-pro-high"}`).
 
 ## Connect to Claude Code
 
@@ -74,8 +82,12 @@ Add to `~/.claude/settings.json`:
 }
 ```
 
-## Tests
+## Scripts
 
 ```bash
-npm test
+npm run typecheck   # tsc --noEmit
+npm run build       # compile src/*.ts -> dist/*.js
+npm test            # run tsx --test test/*.test.ts
+npm run dev         # run directly via tsx
+npm start           # run compiled dist/index.js
 ```

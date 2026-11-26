@@ -1,10 +1,24 @@
+import type {
+  AcpConfigGroupOption,
+  AcpConfigOption,
+  AcpConfigSelectOption,
+  AnthropicModelInfo,
+  AnthropicModelLine,
+  AnthropicModelsListResponse,
+  AnthropicThinkingConfig,
+  ConfigCatalog,
+  DevinMode,
+  DevinModelEntry,
+  ThoughtLevel,
+} from "./types.js";
+
 const CREATED_AT_ISO = "2026-01-01T00:00:00Z";
 
 /**
  * Extract structured model, mode, thought_level, and speed catalogs from ACP configOptions.
  */
-export function parseConfigCatalog(configOptions) {
-  const result = {
+export function parseConfigCatalog(configOptions: readonly AcpConfigOption[] | undefined): ConfigCatalog {
+  const result: ConfigCatalog = {
     models: [],
     modes: [],
     thoughtLevels: [],
@@ -27,11 +41,12 @@ export function parseConfigCatalog(configOptions) {
         supportsImages: Boolean(entry._meta?.["cognition.ai/supportsImages"]),
       }));
     } else if (option.id === "mode") {
-      result.currentMode = typeof option.currentValue === "string" ? option.currentValue : null;
-      result.modes = entries.map((entry) => entry.value);
+      result.currentMode = typeof option.currentValue === "string" ? (option.currentValue as DevinMode) : null;
+      result.modes = entries.map((entry) => entry.value as DevinMode);
     } else if (option.id === "thought_level") {
-      result.currentThoughtLevel = typeof option.currentValue === "string" ? option.currentValue : null;
-      result.thoughtLevels = entries.map((entry) => entry.value);
+      result.currentThoughtLevel =
+        typeof option.currentValue === "string" ? (option.currentValue as ThoughtLevel) : null;
+      result.thoughtLevels = entries.map((entry) => entry.value as ThoughtLevel);
     } else if (option.id === "speed") {
       result.currentSpeed = typeof option.currentValue === "string" ? option.currentValue : null;
       result.speeds = entries.map((entry) => entry.value);
@@ -40,14 +55,22 @@ export function parseConfigCatalog(configOptions) {
   return result;
 }
 
-function flattenSelectOptions(options) {
+function isGroupOption(entry: AcpConfigSelectOption | AcpConfigGroupOption): entry is AcpConfigGroupOption {
+  return "options" in entry && Array.isArray(entry.options);
+}
+
+function flattenSelectOptions(
+  options: readonly (AcpConfigSelectOption | AcpConfigGroupOption)[] | undefined,
+): AcpConfigSelectOption[] {
   if (!Array.isArray(options)) return [];
-  const flat = [];
+  const flat: AcpConfigSelectOption[] = [];
   for (const entry of options) {
     if (!entry || typeof entry !== "object") continue;
-    if (Array.isArray(entry.options)) {
+    if (isGroupOption(entry)) {
       for (const nested of entry.options) {
-        if (nested && typeof nested === "object" && typeof nested.value === "string") flat.push(nested);
+        if (nested && typeof nested === "object" && typeof nested.value === "string") {
+          flat.push(nested);
+        }
       }
     } else if (typeof entry.value === "string") {
       flat.push(entry);
@@ -59,15 +82,27 @@ function flattenSelectOptions(options) {
 /**
  * Map an Anthropic or user-supplied model string to a Devin ACP model id.
  */
-export function resolveDevinModel(requestedModel, catalogModels, { defaultModel = "swe-2-1-medium", modelMap = {} } = {}) {
+export function resolveDevinModel(
+  requestedModel: string | undefined,
+  catalogModels: readonly DevinModelEntry[],
+  options: { defaultModel?: string; modelMap?: Record<string, string> } = {},
+): DevinModelEntry {
+  const defaultModel = options.defaultModel ?? "swe-2-1-medium";
+  const modelMap = options.modelMap ?? {};
+
   const raw = typeof requestedModel === "string" ? requestedModel.trim() : "";
   const mappedRaw = (raw && (modelMap[raw] ?? modelMap[raw.toLowerCase()])) || raw;
 
   if (!mappedRaw) {
-    return findCatalogModel(defaultModel, catalogModels) ?? { id: defaultModel, name: defaultModel, supportsImages: true };
+    return (
+      findCatalogModel(defaultModel, catalogModels) ?? {
+        id: defaultModel,
+        name: defaultModel,
+        supportsImages: true,
+      }
+    );
   }
 
-  // Handle Claude Desktop 1M-context UI variants like "model-id[1m]"
   const candidates = [mappedRaw];
   if (/\[1m\]$/i.test(mappedRaw)) {
     const stripped = mappedRaw.replace(/\[1m\]$/i, "").trim();
@@ -79,10 +114,9 @@ export function resolveDevinModel(requestedModel, catalogModels, { defaultModel 
     if (exact) return exact;
   }
 
-  const mapped = candidates[candidates.length - 1];
+  const mapped = candidates[candidates.length - 1] ?? mappedRaw;
   const lower = mapped.toLowerCase();
 
-  // Map standard Anthropic Claude API model ids (e.g. claude-3-5-haiku-20241022, claude-sonnet-4-5)
   if (lower.includes("haiku")) {
     const haiku = findBestMatch(catalogModels, (m) => m.id.includes("haiku") && !m.id.includes("fusion"));
     if (haiku) return haiku;
@@ -100,7 +134,6 @@ export function resolveDevinModel(requestedModel, catalogModels, { defaultModel 
     if (fable) return fable;
   }
 
-  // Fuzzy prefix/substring match against Devin catalog (e.g. "deepseek", "gemini-4", "gpt-6.2", "swe")
   const norm = normalizeSlug(lower);
   const fuzzy = findBestMatch(
     catalogModels,
@@ -112,11 +145,11 @@ export function resolveDevinModel(requestedModel, catalogModels, { defaultModel 
     return { id: mapped, name: mapped, supportsImages: true };
   }
 
-  return findCatalogModel(defaultModel, catalogModels) ?? catalogModels[0];
+  return findCatalogModel(defaultModel, catalogModels) ?? catalogModels[0]!;
 }
 
-function findCatalogModel(candidate, models) {
-  if (!candidate || !Array.isArray(models) || models.length === 0) return null;
+function findCatalogModel(candidate: string, models: readonly DevinModelEntry[]): DevinModelEntry | null {
+  if (!candidate || models.length === 0) return null;
   const lower = candidate.toLowerCase();
   return (
     models.find((m) => m.id === candidate) ??
@@ -126,56 +159,105 @@ function findCatalogModel(candidate, models) {
   );
 }
 
-function findBestMatch(models, predicate) {
+function findBestMatch(
+  models: readonly DevinModelEntry[],
+  predicate: (model: DevinModelEntry) => boolean,
+): DevinModelEntry | null {
   const candidates = models.filter(predicate);
   if (candidates.length === 0) return null;
   return (
     candidates.find((m) => m.id.endsWith("-medium")) ??
     candidates.find((m) => m.id.endsWith("-high")) ??
-    candidates[0]
+    candidates[0] ??
+    null
   );
 }
 
-function normalizeSlug(value) {
+function normalizeSlug(value: string): string {
   return value.toLowerCase().replace(/[.\s_]+/g, "-");
 }
 
 /**
  * Resolve ACP thought_level from Anthropic `thinking` config + proxy defaults.
  */
-export function resolveThoughtLevel(thinkingParam, defaultThoughtLevel, supportedLevels) {
+export function resolveThoughtLevel(
+  thinkingParam: AnthropicThinkingConfig | undefined,
+  defaultThoughtLevel: ThoughtLevel | null,
+  supportedLevels: readonly ThoughtLevel[],
+): ThoughtLevel | null {
   let desired = defaultThoughtLevel;
   if (thinkingParam && typeof thinkingParam === "object") {
     if (thinkingParam.type === "disabled") {
       desired = "medium";
     } else if (thinkingParam.type === "enabled" || thinkingParam.type === "adaptive") {
       const budget = Number(thinkingParam.budget_tokens);
-      if (Number.isFinite(budget) && budget >= 16_000) desired = "max";
-      else desired = "high";
+      desired = Number.isFinite(budget) && budget >= 16_000 ? "max" : "high";
     }
   }
   if (!desired) return null;
-  if (Array.isArray(supportedLevels) && supportedLevels.length > 0 && !supportedLevels.includes(desired)) {
-    return supportedLevels[0];
+  if (supportedLevels.length > 0 && !supportedLevels.includes(desired)) {
+    return supportedLevels[0] ?? null;
   }
   return desired;
 }
 
+function inferModelLine(id: string): AnthropicModelLine | undefined {
+  const lower = id.toLowerCase();
+  if (lower.includes("opus")) return "opus";
+  if (lower.includes("sonnet")) return "sonnet";
+  if (lower.includes("haiku")) return "haiku";
+  if (lower.includes("fable")) return "fable";
+  return undefined;
+}
+
+function inferMaxInputTokens(id: string): number {
+  const lower = id.toLowerCase();
+  if (
+    lower.endsWith("-1m") ||
+    lower.includes("gemini") ||
+    lower.includes("deepseek") ||
+    lower.includes("claude-fable") ||
+    lower.includes("claude-opus-5") ||
+    lower.includes("claude-sonnet-5")
+  ) {
+    return 1_000_000;
+  }
+  return 262_144;
+}
+
 /**
- * Format Devin model list as Anthropic GET /v1/models payload.
+ * Format Devin model list as Anthropic GET /v1/models payload with metadata for client pickers.
  */
-export function formatAnthropicModelsList(catalogModels, defaultModel) {
-  const list =
+export function formatAnthropicModelsList(
+  catalogModels: readonly DevinModelEntry[],
+  defaultModel: string,
+): AnthropicModelsListResponse {
+  const list: readonly DevinModelEntry[] =
     catalogModels.length > 0
       ? catalogModels
       : [{ id: defaultModel, name: defaultModel, supportsImages: true }];
 
-  const data = list.map((model) => ({
-    type: "model",
-    id: model.id,
-    display_name: model.name,
-    created_at: CREATED_AT_ISO,
-  }));
+  const data: AnthropicModelInfo[] = list.map((model) => {
+    const line = inferModelLine(model.id);
+    return {
+      type: "model",
+      id: model.id,
+      display_name: model.name,
+      created_at: CREATED_AT_ISO,
+      max_input_tokens: inferMaxInputTokens(model.id),
+      max_tokens: 64_000,
+      ...(line ? { line } : {}),
+      capabilities: {
+        thinking: {
+          types: {
+            enabled: { supported: true },
+            adaptive: { supported: true },
+            disabled: { supported: true },
+          },
+        },
+      },
+    };
+  });
 
   return {
     data,

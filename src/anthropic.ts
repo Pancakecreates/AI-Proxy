@@ -1,13 +1,16 @@
 import { randomUUID } from "node:crypto";
-import { extractSystemText, normalizeMessageContent } from "./sessions.mjs";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import { AcpRpcError } from "./acp-client.js";
+import { extractSystemText, normalizeMessageContent, type SessionManager } from "./sessions.js";
+import type { AnthropicMessagesRequest, TurnUsage } from "./types.js";
 
 const KEEPALIVE_INTERVAL_MS = 15_000;
 
-export function createMessageId() {
+export function createMessageId(): string {
   return `msg_${randomUUID().replaceAll("-", "")}`;
 }
 
-export function estimateInputTokens(body) {
+export function estimateInputTokens(body: Partial<AnthropicMessagesRequest> | undefined): number {
   let chars = extractSystemText(body?.system).length;
   if (Array.isArray(body?.messages)) {
     for (const msg of body.messages) {
@@ -19,13 +22,13 @@ export function estimateInputTokens(body) {
     try {
       chars += JSON.stringify(body.tools).length;
     } catch {
-      // Ignore
+      // Ignore unserializable tool payload
     }
   }
   return Math.max(1, Math.ceil(chars / 3.5));
 }
 
-export function sendAnthropicError(res, status, type, message) {
+export function sendAnthropicError(res: ServerResponse, status: number, type: string, message: string): void {
   if (res.headersSent) {
     res.end();
     return;
@@ -41,15 +44,32 @@ export function sendAnthropicError(res, status, type, message) {
   res.end(payload);
 }
 
-function writeSseEvent(res, event, data) {
+function writeSseEvent(res: ServerResponse, event: string, data: unknown): void {
   if (res.writableEnded || res.destroyed) return;
   res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+}
+
+function errorStatusAndType(err: unknown): { status: number; type: string; message: string } {
+  const isAuth = err instanceof AcpRpcError && err.isAuthError;
+  const message = err instanceof Error ? err.message : "Devin ACP execution failed.";
+  return {
+    status: isAuth ? 401 : 502,
+    type: isAuth ? "authentication_error" : "api_error",
+    message,
+  };
 }
 
 /**
  * Handle POST /v1/messages (both streaming SSE and non-streaming JSON).
  */
-export async function handleMessagesRequest(req, res, body, { sessions, cwd, allowThinking = true }) {
+export async function handleMessagesRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  body: AnthropicMessagesRequest,
+  context: { sessions: SessionManager; cwd: string; allowThinking?: boolean },
+): Promise<void> {
+  const { sessions, cwd, allowThinking = true } = context;
+
   if (!body || typeof body !== "object" || !Array.isArray(body.messages) || body.messages.length === 0) {
     sendAnthropicError(res, 400, "invalid_request_error", "Field 'messages' must be a non-empty array.");
     return;
@@ -71,7 +91,7 @@ export async function handleMessagesRequest(req, res, body, { sessions, cwd, all
     try {
       let thinking = "";
       let text = "";
-      let latestUsage = { inputTokens: 0, outputTokens: 0 };
+      let latestUsage: TurnUsage = { inputTokens: 0, outputTokens: 0 };
 
       const result = await sessions.runTurn(body, {
         cwd,
@@ -87,7 +107,9 @@ export async function handleMessagesRequest(req, res, body, { sessions, cwd, all
         },
       });
 
-      const content = [];
+      const content: Array<
+        { type: "thinking"; thinking: string; signature: string } | { type: "text"; text: string }
+      > = [];
       if (thinkingEnabled && thinking) {
         content.push({ type: "thinking", thinking, signature: "devin-acp" });
       }
@@ -98,7 +120,10 @@ export async function handleMessagesRequest(req, res, body, { sessions, cwd, all
       }
 
       const inputTokens = result.usage.inputTokens || latestUsage.inputTokens || estimateInputTokens(body);
-      const outputTokens = result.usage.outputTokens || latestUsage.outputTokens || Math.max(1, Math.ceil((text.length + thinking.length) / 3.5));
+      const outputTokens =
+        result.usage.outputTokens ||
+        latestUsage.outputTokens ||
+        Math.max(1, Math.ceil((text.length + thinking.length) / 3.5));
 
       const payload = JSON.stringify({
         id: messageId,
@@ -120,9 +145,8 @@ export async function handleMessagesRequest(req, res, body, { sessions, cwd, all
       res.end(payload);
     } catch (err) {
       if (controller.signal.aborted) return;
-      const status = err?.isAuthError ? 401 : 502;
-      const errType = err?.isAuthError ? "authentication_error" : "api_error";
-      sendAnthropicError(res, status, errType, err?.message || "Devin ACP execution failed.");
+      const mapped = errorStatusAndType(err);
+      sendAnthropicError(res, mapped.status, mapped.type, mapped.message);
     } finally {
       req.off("close", onClientClose);
       res.off("close", onClientClose);
@@ -130,7 +154,6 @@ export async function handleMessagesRequest(req, res, body, { sessions, cwd, all
     return;
   }
 
-  // Streaming SSE path
   res.writeHead(200, {
     "Content-Type": "text/event-stream; charset=utf-8",
     "Cache-Control": "no-cache, no-transform",
@@ -157,10 +180,10 @@ export async function handleMessagesRequest(req, res, body, { sessions, cwd, all
   }, KEEPALIVE_INTERVAL_MS);
 
   let nextBlockIndex = 0;
-  let activeBlockType = null; // "thinking" | "text" | null
+  let activeBlockType: "thinking" | "text" | null = null;
   let activeBlockIndex = -1;
   let emittedText = false;
-  let latestUsage = { inputTokens: 0, outputTokens: 0 };
+  let latestUsage: TurnUsage = { inputTokens: 0, outputTokens: 0 };
 
   const closeActiveBlock = () => {
     if (activeBlockType === null) return;
@@ -179,7 +202,7 @@ export async function handleMessagesRequest(req, res, body, { sessions, cwd, all
     activeBlockIndex = -1;
   };
 
-  const ensureBlock = (type) => {
+  const ensureBlock = (type: "thinking" | "text") => {
     if (activeBlockType === type) return;
     closeActiveBlock();
     activeBlockIndex = nextBlockIndex++;
@@ -230,7 +253,10 @@ export async function handleMessagesRequest(req, res, body, { sessions, cwd, all
     closeActiveBlock();
 
     const inputTokens = result.usage.inputTokens || latestUsage.inputTokens || estimateInputTokens(body);
-    const outputTokens = result.usage.outputTokens || latestUsage.outputTokens || Math.max(1, Math.ceil(result.assistantText.length / 3.5));
+    const outputTokens =
+      result.usage.outputTokens ||
+      latestUsage.outputTokens ||
+      Math.max(1, Math.ceil(result.assistantText.length / 3.5));
 
     writeSseEvent(res, "message_delta", {
       type: "message_delta",
@@ -242,12 +268,10 @@ export async function handleMessagesRequest(req, res, body, { sessions, cwd, all
   } catch (err) {
     if (!controller.signal.aborted && !res.writableEnded && !res.destroyed) {
       closeActiveBlock();
+      const mapped = errorStatusAndType(err);
       writeSseEvent(res, "error", {
         type: "error",
-        error: {
-          type: err?.isAuthError ? "authentication_error" : "api_error",
-          message: err?.message || "Devin ACP execution failed.",
-        },
+        error: { type: mapped.type, message: mapped.message },
       });
       res.end();
     }

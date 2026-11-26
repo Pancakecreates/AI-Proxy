@@ -1,72 +1,99 @@
-import { spawn } from "node:child_process";
+import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { createInterface } from "node:readline";
+import { createInterface, type Interface } from "node:readline";
+import type {
+  AcpContentBlock,
+  AcpInitializeResult,
+  AcpJsonRpcMessage,
+  AcpPromptResult,
+  AcpRequestPermissionParams,
+  AcpSessionNewResult,
+  AcpSessionUpdate,
+  AcpSetConfigResult,
+  DevinMode,
+  ProxyConfig,
+} from "./types.js";
 
 const CLIENT_INFO = {
   name: "ai-anthropic-proxy",
   title: "AI-Anthropic-Proxy",
-  version: "1.0.0",
-};
+  version: "1.1.0",
+} as const;
 
 const CLIENT_CAPABILITIES = {
   fs: { readTextFile: false, writeTextFile: false },
   terminal: false,
-};
+} as const;
 
 export class AcpRpcError extends Error {
-  constructor(code, message, data) {
+  readonly code: number;
+  readonly data: Record<string, unknown> | undefined;
+
+  constructor(code: number, message: string, data?: Record<string, unknown>) {
     super(message);
     this.name = "AcpRpcError";
     this.code = code;
     this.data = data;
   }
 
-  get isSessionNotFound() {
+  get isSessionNotFound(): boolean {
     return (
-      (this.code === -32016 && this.data && this.data["cognition.ai/errorKind"] === "session_not_found") ||
+      (this.code === -32016 && this.data?.["cognition.ai/errorKind"] === "session_not_found") ||
       this.code === -32002
     );
   }
 
-  get isAuthError() {
+  get isAuthError(): boolean {
     return this.code === -32000;
   }
+}
+
+interface PendingRpcCall {
+  child: ChildProcessWithoutNullStreams;
+  timer: ReturnType<typeof setTimeout>;
+  resolve: (value: Record<string, unknown>) => void;
+  reject: (err: unknown) => void;
+}
+
+export interface AcpClientEvents {
+  exit: [error: Error];
+  sessionUpdate: [payload: { sessionId: string; update: AcpSessionUpdate }];
 }
 
 /**
  * Persistent JSON-RPC 2.0 over stdio client for `devin acp`.
  */
-export class AcpClient extends EventEmitter {
-  #config;
-  #proc = null;
-  #rl = null;
+export class AcpClient extends EventEmitter<AcpClientEvents> {
+  readonly #config: ProxyConfig;
+  #proc: ChildProcessWithoutNullStreams | null = null;
+  #rl: Interface | null = null;
   #nextId = 1;
-  #pending = new Map();
-  #readyPromise = null;
-  #initResult = null;
+  readonly #pending = new Map<string | number, PendingRpcCall>();
+  #readyPromise: Promise<AcpInitializeResult> | null = null;
+  #initResult: AcpInitializeResult | null = null;
   #stopping = false;
-  #permissionMode;
+  #permissionMode: DevinMode;
 
-  constructor(config) {
+  constructor(config: ProxyConfig) {
     super();
     this.#config = config;
     this.#permissionMode = config.mode;
   }
 
-  get isReady() {
+  get isReady(): boolean {
     return this.#proc !== null && this.#proc.exitCode === null && this.#initResult !== null;
   }
 
-  get initializeResult() {
+  get initializeResult(): AcpInitializeResult | null {
     return this.#initResult;
   }
 
-  setPermissionMode(mode) {
+  setPermissionMode(mode: DevinMode): void {
     this.#permissionMode = mode;
   }
 
-  async ensureReady() {
-    if (this.isReady) return this.#initResult;
+  async ensureReady(): Promise<AcpInitializeResult> {
+    if (this.isReady && this.#initResult) return this.#initResult;
     if (this.#readyPromise) return this.#readyPromise;
 
     this.#readyPromise = this.#startAndInitialize().finally(() => {
@@ -75,7 +102,7 @@ export class AcpClient extends EventEmitter {
     return this.#readyPromise;
   }
 
-  async #startAndInitialize() {
+  async #startAndInitialize(): Promise<AcpInitializeResult> {
     this.#stopping = false;
     const args = this.#config.acpArgs ?? ["acp", "--process-model", this.#config.processModel];
     if (this.#config.debug) {
@@ -97,9 +124,9 @@ export class AcpClient extends EventEmitter {
     rl.on("line", (line) => {
       const trimmed = line.trim();
       if (!trimmed) return;
-      let msg;
+      let msg: AcpJsonRpcMessage;
       try {
-        msg = JSON.parse(trimmed);
+        msg = JSON.parse(trimmed) as AcpJsonRpcMessage;
       } catch {
         if (this.#config.debug) console.error("[acp] non-json stdout:", trimmed.slice(0, 300));
         return;
@@ -107,7 +134,7 @@ export class AcpClient extends EventEmitter {
       this.#handleMessage(child, msg);
     });
 
-    child.stderr.on("data", (chunk) => {
+    child.stderr.on("data", (chunk: Buffer) => {
       if (this.#config.debug) {
         process.stderr.write(`[devin stderr] ${chunk.toString("utf8")}`);
       }
@@ -122,7 +149,7 @@ export class AcpClient extends EventEmitter {
       this.#handleProcessClose(child, new Error(`devin acp exited (${reason})`));
     });
 
-    const init = await this.request(
+    const init = (await this.request(
       "initialize",
       {
         protocolVersion: 1,
@@ -130,12 +157,13 @@ export class AcpClient extends EventEmitter {
         clientInfo: CLIENT_INFO,
       },
       this.#config.startupTimeoutMs,
-    );
+    )) as unknown as AcpInitializeResult;
+
     this.#initResult = init;
     return init;
   }
 
-  #handleProcessClose(child, error) {
+  #handleProcessClose(child: ChildProcessWithoutNullStreams, error: Error): void {
     if (this.#proc === child) {
       this.#proc = null;
       this.#initResult = null;
@@ -154,68 +182,66 @@ export class AcpClient extends EventEmitter {
     }
   }
 
-  #handleMessage(child, msg) {
+  #handleMessage(child: ChildProcessWithoutNullStreams, msg: AcpJsonRpcMessage): void {
     if (!msg || typeof msg !== "object") return;
 
-    // Server response to our request
     if (msg.id !== undefined && msg.method === undefined) {
       const entry = this.#pending.get(msg.id);
       if (!entry) return;
       clearTimeout(entry.timer);
       this.#pending.delete(msg.id);
       if (msg.error) {
-        entry.reject(new AcpRpcError(msg.error.code ?? -32603, msg.error.message ?? "ACP error", msg.error.data));
+        entry.reject(
+          new AcpRpcError(msg.error.code ?? -32603, msg.error.message ?? "ACP error", msg.error.data),
+        );
       } else {
         entry.resolve(msg.result ?? {});
       }
       return;
     }
 
-    // Server-initiated request (requires JSON-RPC response)
     if (msg.id !== undefined && typeof msg.method === "string") {
-      this.#handleServerRequest(child, msg).catch((err) => {
-        if (this.#config.debug) console.error("[acp] server request error:", err);
-      });
+      this.#handleServerRequest(child, msg);
       return;
     }
 
-    // Server notification
-    if (msg.method === "session/update" && msg.params?.sessionId && msg.params?.update) {
-      this.emit("sessionUpdate", {
-        sessionId: msg.params.sessionId,
-        update: msg.params.update,
-      });
+    if (msg.method === "session/update" && msg.params) {
+      const sessionId = msg.params.sessionId;
+      const update = msg.params.update as AcpSessionUpdate | undefined;
+      if (typeof sessionId === "string" && update && typeof update === "object") {
+        this.emit("sessionUpdate", { sessionId, update });
+      }
     }
   }
 
-  async #handleServerRequest(child, msg) {
-    let result = {};
+  #handleServerRequest(child: ChildProcessWithoutNullStreams, msg: AcpJsonRpcMessage): void {
+    let result: Record<string, unknown> = {};
     if (msg.method === "session/request_permission") {
-      result = this.#pickPermissionOutcome(msg.params);
+      result = this.#pickPermissionOutcome((msg.params ?? {}) as AcpRequestPermissionParams);
     } else if (msg.method === "session/create_elicitation") {
       result = { action: "decline" };
     }
 
-    if (this.#proc === child && child.stdin.writable) {
+    if (this.#proc === child && child.stdin.writable && msg.id !== undefined) {
       this.#writeJson(child, { jsonrpc: "2.0", id: msg.id, result });
     }
   }
 
-  #pickPermissionOutcome(params) {
-    const options = Array.isArray(params?.options) ? params.options : [];
+  #pickPermissionOutcome(params: AcpRequestPermissionParams): Record<string, unknown> {
+    const options = Array.isArray(params.options) ? params.options : [];
     const allow = this.#permissionMode !== "ask";
     if (allow) {
       const preferred =
-        options.find((opt) => opt?.kind === "allow_always") ??
-        options.find((opt) => opt?.kind === "allow_once") ??
+        options.find((opt) => opt.kind === "allow_always") ??
+        options.find((opt) => opt.kind === "allow_once") ??
         options[0];
       if (preferred?.optionId) {
         return { outcome: { outcome: "selected", optionId: preferred.optionId } };
       }
     } else {
       const reject =
-        options.find((opt) => opt?.kind === "reject_once") ??
-        options.find((opt) => opt?.kind === "reject_always");
+        options.find((opt) => opt.kind === "reject_once") ??
+        options.find((opt) => opt.kind === "reject_always");
       if (reject?.optionId) {
         return { outcome: { outcome: "selected", optionId: reject.optionId } };
       }
@@ -223,11 +249,16 @@ export class AcpClient extends EventEmitter {
     return { outcome: { outcome: "cancelled" } };
   }
 
-  #writeJson(child, payload) {
+  #writeJson(child: ChildProcessWithoutNullStreams, payload: Record<string, unknown>): void {
     child.stdin.write(`${JSON.stringify(payload)}\n`);
   }
 
-  request(method, params = {}, timeoutMs = this.#config.requestTimeoutMs, signal) {
+  request(
+    method: string,
+    params: Record<string, unknown> = {},
+    timeoutMs: number = this.#config.requestTimeoutMs,
+    signal?: AbortSignal,
+  ): Promise<Record<string, unknown>> {
     const child = this.#proc;
     if (!child || child.exitCode !== null || !child.stdin.writable) {
       return Promise.reject(new Error("ACP process is not running."));
@@ -235,6 +266,12 @@ export class AcpClient extends EventEmitter {
 
     const id = this.#nextId++;
     return new Promise((resolve, reject) => {
+      const cleanup = () => {
+        clearTimeout(timer);
+        this.#pending.delete(id);
+        signal?.removeEventListener("abort", onAbort);
+      };
+
       const onAbort = () => {
         cleanup();
         reject(signal?.reason instanceof Error ? signal.reason : new Error("ACP request aborted"));
@@ -244,12 +281,6 @@ export class AcpClient extends EventEmitter {
         cleanup();
         reject(new Error(`ACP request "${method}" timed out after ${timeoutMs}ms`));
       }, timeoutMs);
-
-      const cleanup = () => {
-        clearTimeout(timer);
-        this.#pending.delete(id);
-        signal?.removeEventListener("abort", onAbort);
-      };
 
       if (signal) {
         if (signal.aborted) {
@@ -282,22 +313,39 @@ export class AcpClient extends EventEmitter {
     });
   }
 
-  async newSession({ cwd, mcpServers = [] }) {
+  async newSession({ cwd, mcpServers = [] }: { cwd: string; mcpServers?: unknown[] }): Promise<AcpSessionNewResult> {
     await this.ensureReady();
-    return this.request("session/new", { cwd, mcpServers }, this.#config.startupTimeoutMs);
+    return (await this.request(
+      "session/new",
+      { cwd, mcpServers },
+      this.#config.startupTimeoutMs,
+    )) as unknown as AcpSessionNewResult;
   }
 
-  async setConfigOption(sessionId, configId, value) {
+  async setConfigOption(sessionId: string, configId: string, value: string): Promise<AcpSetConfigResult> {
     await this.ensureReady();
-    return this.request("session/set_config_option", { sessionId, configId, value }, 15_000);
+    return (await this.request(
+      "session/set_config_option",
+      { sessionId, configId, value },
+      15_000,
+    )) as unknown as AcpSetConfigResult;
   }
 
-  async prompt(sessionId, promptBlocks, { signal, timeoutMs = this.#config.requestTimeoutMs } = {}) {
+  async prompt(
+    sessionId: string,
+    promptBlocks: AcpContentBlock[],
+    options: { signal?: AbortSignal; timeoutMs?: number } = {},
+  ): Promise<AcpPromptResult> {
     await this.ensureReady();
-    return this.request("session/prompt", { sessionId, prompt: promptBlocks }, timeoutMs, signal);
+    return (await this.request(
+      "session/prompt",
+      { sessionId, prompt: promptBlocks },
+      options.timeoutMs ?? this.#config.requestTimeoutMs,
+      options.signal,
+    )) as unknown as AcpPromptResult;
   }
 
-  async cancel(sessionId) {
+  async cancel(sessionId: string): Promise<void> {
     if (!this.isReady) return;
     try {
       await this.request("session/cancel", { sessionId }, 5_000);
@@ -306,20 +354,16 @@ export class AcpClient extends EventEmitter {
     }
   }
 
-  async closeSession(sessionId) {
+  async closeSession(sessionId: string): Promise<void> {
     if (!this.isReady) return;
     try {
-      await this.request(
-        "session/close",
-        { sessionId, _meta: { "cognition.ai/force": true } },
-        5_000,
-      );
+      await this.request("session/close", { sessionId, _meta: { "cognition.ai/force": true } }, 5_000);
     } catch {
       // Best-effort forced close
     }
   }
 
-  async shutdown() {
+  async shutdown(): Promise<void> {
     this.#stopping = true;
     const child = this.#proc;
     this.#proc = null;
@@ -333,7 +377,7 @@ export class AcpClient extends EventEmitter {
     } catch {
       // Ignore
     }
-    await new Promise((resolve) => {
+    await new Promise<void>((resolve) => {
       const killTimer = setTimeout(() => {
         try {
           child.kill("SIGKILL");

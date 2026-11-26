@@ -1,8 +1,53 @@
 import { createHash } from "node:crypto";
-import { AcpRpcError } from "./acp-client.mjs";
-import { parseConfigCatalog, resolveDevinModel, resolveThoughtLevel } from "./models.mjs";
+import { type AcpClient, AcpRpcError } from "./acp-client.js";
+import { parseConfigCatalog, resolveDevinModel, resolveThoughtLevel } from "./models.js";
+import type {
+  AcpConfigOption,
+  AcpContentBlock,
+  AcpSessionUpdate,
+  AnthropicContentBlock,
+  AnthropicMessageParam,
+  AnthropicMessagesRequest,
+  ConfigCatalog,
+  DevinMode,
+  ProxyConfig,
+  ThoughtLevel,
+  TurnResult,
+  TurnUsage,
+} from "./types.js";
 
-export function extractSystemText(system) {
+interface NormalizedContent {
+  text: string;
+  images: Array<{ type: "image"; data: string; mimeType: string }>;
+}
+
+interface SessionRecord {
+  id: string;
+  cwd: string;
+  systemHash: string;
+  fingerprints: string[];
+  model: string | null;
+  mode: DevinMode | null;
+  thoughtLevel: ThoughtLevel | null;
+  busy: boolean;
+  lastUsedAt: number;
+}
+
+interface SeenToolState {
+  title: string;
+  status: string;
+  announcedStart?: boolean;
+}
+
+export interface RunTurnCallbacks {
+  cwd?: string;
+  signal?: AbortSignal;
+  onThinking?: (chunk: string) => void;
+  onText?: (chunk: string) => void;
+  onUsage?: (usage: TurnUsage) => void;
+}
+
+export function extractSystemText(system: AnthropicMessagesRequest["system"]): string {
   if (typeof system === "string") return system.trim();
   if (!Array.isArray(system)) return "";
   return system
@@ -18,7 +63,7 @@ export function extractSystemText(system) {
     .trim();
 }
 
-export function normalizeMessageContent(content) {
+export function normalizeMessageContent(content: string | AnthropicContentBlock[] | undefined): NormalizedContent {
   if (typeof content === "string") {
     return { text: content, images: [] };
   }
@@ -26,8 +71,9 @@ export function normalizeMessageContent(content) {
     return { text: "", images: [] };
   }
 
-  const textParts = [];
-  const images = [];
+  const textParts: string[] = [];
+  const images: Array<{ type: "image"; data: string; mimeType: string }> = [];
+
   for (const block of content) {
     if (!block || typeof block !== "object") continue;
     if (block.type === "text" && typeof block.text === "string") {
@@ -39,8 +85,7 @@ export function normalizeMessageContent(content) {
         mimeType: block.source.media_type || "image/png",
       });
     } else if (block.type === "tool_use") {
-      const inputJson = safeJson(block.input);
-      textParts.push(`[Tool Call: ${block.name ?? "tool"}]\n${inputJson}`);
+      textParts.push(`[Tool Call: ${block.name ?? "tool"}]\n${safeJson(block.input)}`);
     } else if (block.type === "tool_result") {
       const nested = normalizeMessageContent(block.content);
       const prefix = block.is_error ? "[Tool Error]" : "[Tool Result]";
@@ -51,7 +96,7 @@ export function normalizeMessageContent(content) {
   return { text: textParts.join("\n\n").trim(), images };
 }
 
-function safeJson(value) {
+function safeJson(value: unknown): string {
   try {
     return JSON.stringify(value ?? {});
   } catch {
@@ -59,28 +104,53 @@ function safeJson(value) {
   }
 }
 
-function messageFingerprint(msg) {
-  const norm = normalizeMessageContent(msg?.content);
+function messageFingerprint(msg: Pick<AnthropicMessageParam, "role" | "content">): string {
+  const norm = normalizeMessageContent(msg.content);
   const imgDigest = norm.images.map((img) => `${img.mimeType}:${img.data.length}`).join(",");
   return createHash("sha256")
-    .update(`${msg?.role ?? "user"}\0${norm.text.trim()}\0${imgDigest}`)
+    .update(`${msg.role}\0${norm.text.trim()}\0${imgDigest}`)
     .digest("hex");
 }
 
-function hashSystem(text) {
+function hashSystem(text: string): string {
   return createHash("sha256").update(text).digest("hex");
 }
 
-function buildPromptBlocks({ systemText, messages, includeSystem, supportsImages }) {
-  const blocks = [];
-  const chunks = [];
+function appendImages(
+  blocks: AcpContentBlock[],
+  images: ReadonlyArray<{ type: "image"; data: string; mimeType: string }>,
+  supportsImages: boolean,
+): void {
+  if (images.length === 0) return;
+  if (!supportsImages) {
+    blocks.push({
+      type: "text",
+      text: `[${images.length} image attachment(s) omitted because selected model does not support images]`,
+    });
+    return;
+  }
+  for (const image of images) {
+    blocks.push(image);
+  }
+}
+
+function buildPromptBlocks(params: {
+  systemText: string;
+  messages: readonly AnthropicMessageParam[];
+  includeSystem: boolean;
+  supportsImages: boolean;
+}): AcpContentBlock[] {
+  const { systemText, messages, includeSystem, supportsImages } = params;
+  const blocks: AcpContentBlock[] = [];
+  const chunks: string[] = [];
 
   if (includeSystem && systemText) {
     chunks.push(`<system_instructions>\n${systemText}\n</system_instructions>`);
   }
 
-  if (messages.length === 1 && messages[0].role === "user") {
-    const norm = normalizeMessageContent(messages[0].content);
+  const single = messages.length === 1 ? messages[0] : undefined;
+  if (single && single.role === "user") {
+    const norm = normalizeMessageContent(single.content);
     if (norm.text) chunks.push(norm.text);
     if (chunks.length > 0) blocks.push({ type: "text", text: chunks.join("\n\n") });
     appendImages(blocks, norm.images, supportsImages);
@@ -100,29 +170,18 @@ function buildPromptBlocks({ systemText, messages, includeSystem, supportsImages
   return blocks;
 }
 
-function appendImages(blocks, images, supportsImages) {
-  if (images.length === 0) return;
-  if (!supportsImages) {
-    blocks.push({ type: "text", text: `[${images.length} image attachment(s) omitted because selected model does not support images]` });
-    return;
-  }
-  for (const image of images) {
-    blocks.push(image);
-  }
-}
-
 /**
  * Manages ACP session lifecycle, model catalog cache, prefix matching, and turn execution.
  */
 export class SessionManager {
-  #acp;
-  #config;
-  #catalog = parseConfigCatalog([]);
-  #sessions = new Map();
-  #warmupPromise = null;
-  #toolStates = new Map();
+  readonly #acp: AcpClient;
+  readonly #config: ProxyConfig;
+  #catalog: ConfigCatalog = parseConfigCatalog([]);
+  readonly #sessions = new Map<string, SessionRecord>();
+  #warmupPromise: Promise<ConfigCatalog> | null = null;
+  readonly #toolStates = new Map<string, Map<string, SeenToolState>>();
 
-  constructor(acp, config) {
+  constructor(acp: AcpClient, config: ProxyConfig) {
     this.#acp = acp;
     this.#config = config;
     this.#acp.on("exit", () => {
@@ -130,16 +189,16 @@ export class SessionManager {
     });
   }
 
-  get catalog() {
+  get catalog(): ConfigCatalog {
     return this.#catalog;
   }
 
-  get activeSessionCount() {
+  get activeSessionCount(): number {
     return this.#sessions.size;
   }
 
-  async warmUp() {
-    if (this.#catalog.models.length > 0) return this.#catalog;
+  async warmUp(force = false): Promise<ConfigCatalog> {
+    if (!force && this.#catalog.models.length > 0) return this.#catalog;
     if (this.#warmupPromise) return this.#warmupPromise;
 
     this.#warmupPromise = (async () => {
@@ -156,15 +215,20 @@ export class SessionManager {
     return this.#warmupPromise;
   }
 
-  #updateCatalog(configOptions) {
+  #updateCatalog(configOptions: readonly AcpConfigOption[] | undefined): void {
     const parsed = parseConfigCatalog(configOptions);
     if (parsed.models.length > 0) {
       this.#catalog = parsed;
     }
   }
 
-  #findMatchingSession({ cwd, systemHash, fingerprints }) {
-    let best = null;
+  #findMatchingSession(params: {
+    cwd: string;
+    systemHash: string;
+    fingerprints: readonly string[];
+  }): SessionRecord | null {
+    const { cwd, systemHash, fingerprints } = params;
+    let best: SessionRecord | null = null;
     let bestPrefixLen = 0;
 
     for (const session of this.#sessions.values()) {
@@ -187,7 +251,7 @@ export class SessionManager {
     return best;
   }
 
-  async #evictIfNeeded() {
+  async #evictIfNeeded(): Promise<void> {
     const now = Date.now();
     for (const [id, session] of this.#sessions) {
       if (!session.busy && now - session.lastUsedAt > this.#config.idleSessionTtlMs) {
@@ -197,7 +261,7 @@ export class SessionManager {
     }
 
     while (this.#sessions.size >= this.#config.maxSessions) {
-      let oldest = null;
+      let oldest: SessionRecord | null = null;
       for (const session of this.#sessions.values()) {
         if (session.busy) continue;
         if (!oldest || session.lastUsedAt < oldest.lastUsedAt) oldest = session;
@@ -208,12 +272,12 @@ export class SessionManager {
     }
   }
 
-  async #createSession(cwd) {
+  async #createSession(cwd: string): Promise<SessionRecord> {
     await this.#evictIfNeeded();
     const created = await this.#acp.newSession({ cwd });
     this.#updateCatalog(created.configOptions);
     const localCatalog = parseConfigCatalog(created.configOptions);
-    const record = {
+    const record: SessionRecord = {
       id: created.sessionId,
       cwd,
       systemHash: "",
@@ -228,32 +292,37 @@ export class SessionManager {
     return record;
   }
 
-  async #configureSession(session, { targetModel, mode, thoughtLevel }) {
-    if (mode && session.mode !== mode) {
-      const updated = await this.#acp.setConfigOption(session.id, "mode", mode);
+  async #configureSession(
+    session: SessionRecord,
+    settings: { targetModel: string; mode: DevinMode; thoughtLevel: ThoughtLevel | null },
+  ): Promise<void> {
+    if (settings.mode && session.mode !== settings.mode) {
+      const updated = await this.#acp.setConfigOption(session.id, "mode", settings.mode);
       this.#updateCatalog(updated.configOptions);
-      session.mode = mode;
+      session.mode = settings.mode;
     }
-    if (targetModel && session.model !== targetModel) {
-      const updated = await this.#acp.setConfigOption(session.id, "model", targetModel);
+    if (settings.targetModel && session.model !== settings.targetModel) {
+      const updated = await this.#acp.setConfigOption(session.id, "model", settings.targetModel);
       this.#updateCatalog(updated.configOptions);
-      session.model = targetModel;
+      session.model = settings.targetModel;
     }
-    if (thoughtLevel && session.thoughtLevel !== thoughtLevel) {
-      const updated = await this.#acp.setConfigOption(session.id, "thought_level", thoughtLevel);
+    if (settings.thoughtLevel && session.thoughtLevel !== settings.thoughtLevel) {
+      const updated = await this.#acp.setConfigOption(session.id, "thought_level", settings.thoughtLevel);
       this.#updateCatalog(updated.configOptions);
-      session.thoughtLevel = thoughtLevel;
+      session.thoughtLevel = settings.thoughtLevel;
     }
   }
 
   /**
    * Execute an Anthropic /v1/messages turn through an ACP session and forward streaming events.
    */
-  async runTurn(request, { cwd = this.#config.cwd, signal, onThinking, onText, onUsage }) {
+  async runTurn(request: AnthropicMessagesRequest, callbacks: RunTurnCallbacks): Promise<TurnResult> {
     if (this.#catalog.models.length === 0) {
       await this.warmUp();
     }
 
+    const cwd = callbacks.cwd ?? this.#config.cwd;
+    const { signal, onThinking, onText, onUsage } = callbacks;
     const systemText = extractSystemText(request.system);
     const systemHash = hashSystem(systemText);
     const messages = Array.isArray(request.messages) ? request.messages : [];
@@ -294,8 +363,8 @@ export class SessionManager {
       let assistantText = "";
       let deliveredAnyChunk = false;
 
-      const onUpdate = ({ sessionId, update }) => {
-        if (sessionId !== session.id || !update) return;
+      const onUpdate = ({ sessionId, update }: { sessionId: string; update: AcpSessionUpdate }) => {
+        if (!session || sessionId !== session.id) return;
         const kind = update.sessionUpdate;
 
         if (kind === "config_option_update") {
@@ -303,10 +372,9 @@ export class SessionManager {
           return;
         }
         if (kind === "usage_update") {
-          onUsage?.({
-            inputTokens: update._meta?.["cognition.ai/inputTokens"] ?? update.used ?? 0,
-            outputTokens: update._meta?.["cognition.ai/outputTokens"] ?? 0,
-          });
+          const inputTokens = Number(update._meta?.["cognition.ai/inputTokens"] ?? update.used ?? 0) || 0;
+          const outputTokens = Number(update._meta?.["cognition.ai/outputTokens"] ?? 0) || 0;
+          onUsage?.({ inputTokens, outputTokens });
           return;
         }
         if (kind === "agent_thought_chunk" && update.content?.type === "text" && update.content.text) {
@@ -335,7 +403,7 @@ export class SessionManager {
       };
 
       const onAbort = () => {
-        void this.#acp.cancel(session.id);
+        if (session) void this.#acp.cancel(session.id);
       };
 
       this.#acp.on("sessionUpdate", onUpdate);
@@ -355,10 +423,10 @@ export class SessionManager {
 
         return {
           modelId: resolvedModel.id,
-          stopReason: mapStopReason(promptResult?.stopReason),
+          stopReason: mapStopReason(promptResult.stopReason),
           usage: {
-            inputTokens: promptResult?.usage?.inputTokens ?? 0,
-            outputTokens: promptResult?.usage?.outputTokens ?? 0,
+            inputTokens: promptResult.usage?.inputTokens ?? 0,
+            outputTokens: promptResult.usage?.outputTokens ?? 0,
           },
           assistantText,
         };
@@ -378,8 +446,8 @@ export class SessionManager {
       } finally {
         signal?.removeEventListener("abort", onAbort);
         this.#acp.off("sessionUpdate", onUpdate);
-        this.#toolStates.delete(session?.id);
         if (session) {
+          this.#toolStates.delete(session.id);
           session.busy = false;
           session.lastUsedAt = Date.now();
         }
@@ -389,7 +457,7 @@ export class SessionManager {
     throw new Error("Failed to establish Devin ACP session.");
   }
 
-  #formatToolUpdate(sessionId, update) {
+  #formatToolUpdate(sessionId: string, update: AcpSessionUpdate): string {
     if (update._meta?.["cognition.ai/eventType"] === "hook_execution" && update.status !== "failed") {
       return "";
     }
@@ -400,15 +468,15 @@ export class SessionManager {
     }
 
     const id = update.toolCallId || update.title || update.name || "tool";
-    const prev = seen.get(id) ?? {};
-    const title = update.title || update.name || prev.title || "tool";
-    const status = update.status || prev.status || "running";
+    const prev = seen.get(id);
+    const title = update.title || update.name || prev?.title || "tool";
+    const status = update.status || prev?.status || "running";
 
-    if (prev.title === title && prev.status === status) return "";
-    seen.set(id, { title, status });
+    if (prev && prev.title === title && prev.status === status) return "";
+    seen.set(id, { title, status, announcedStart: prev?.announcedStart });
 
     if (status === "pending" || status === "in_progress") {
-      if (prev.announcedStart) return "";
+      if (prev?.announcedStart) return "";
       seen.set(id, { title, status, announcedStart: true });
       return `\n[Devin tool] ${title}...\n`;
     }
@@ -418,14 +486,14 @@ export class SessionManager {
     return "";
   }
 
-  async closeAll() {
+  async closeAll(): Promise<void> {
     const ids = [...this.#sessions.keys()];
     this.#sessions.clear();
     await Promise.all(ids.map((id) => this.#acp.closeSession(id)));
   }
 }
 
-function mapStopReason(acpStopReason) {
+function mapStopReason(acpStopReason: string | undefined): TurnResult["stopReason"] {
   if (acpStopReason === "max_tokens" || acpStopReason === "max_turn_requests") return "max_tokens";
   if (acpStopReason === "refusal") return "refusal";
   return "end_turn";

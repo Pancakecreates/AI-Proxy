@@ -1,14 +1,16 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { AcpClient } from "../src/acp-client.mjs";
-import { formatAnthropicModelsList, parseConfigCatalog, resolveDevinModel, resolveThoughtLevel } from "../src/models.mjs";
-import { createProxyServer } from "../src/server.mjs";
-import { SessionManager } from "../src/sessions.mjs";
+import { AcpClient } from "../src/acp-client.js";
+import { formatAnthropicModelsList, parseConfigCatalog, resolveDevinModel, resolveThoughtLevel } from "../src/models.js";
+import { createProxyServer } from "../src/server.js";
+import { SessionManager } from "../src/sessions.js";
+import type { AnthropicModelsListResponse, ProxyConfig } from "../src/types.js";
 
-function createFakeAcpFixture() {
+function createFakeAcpFixture(): { dir: string; scriptPath: string } {
   const dir = mkdtempSync(join(tmpdir(), "devin-proxy-test-"));
   const scriptPath = join(dir, "fake-acp.mjs");
   const script = `
@@ -54,9 +56,8 @@ rl.on("line", (line) => {
               { value: "swe-2-1-medium", name: "SWE-2.1", _meta: { "cognition.ai/supportsImages": true } },
               { value: "claude-opus-5-5-medium", name: "Claude Opus 5.5", _meta: { "cognition.ai/supportsImages": true } },
               { value: "gemini-4-carbon-medium", name: "Gemini 4 Carbon", _meta: { "cognition.ai/supportsImages": true } },
-        { value: "deepseek-v4-pro-high", name: "DeepSeek V4 Pro", _meta: { "cognition.ai/supportsImages": false } },
-        { value: "claude-opus-4-6-1m", name: "Claude Opus 4.6 1M", _meta: { "cognition.ai/supportsImages": true } },
-              { value: "deepseek-v4-pro-high", name: "DeepSeek V4 Pro", _meta: { "cognition.ai/supportsImages": false } }
+              { value: "deepseek-v4-pro-high", name: "DeepSeek V4 Pro", _meta: { "cognition.ai/supportsImages": false } },
+              { value: "claude-opus-4-6-1m", name: "Claude Opus 4.6 1M", _meta: { "cognition.ai/supportsImages": true } }
             ]
           },
           {
@@ -135,21 +136,23 @@ rl.on("line", (line) => {
   return { dir, scriptPath };
 }
 
-function parseSseEvents(raw) {
-  const chunks = raw.trim().split("\n\n");
-  return chunks.filter(Boolean).map((block) => {
-    const lines = block.split("\n");
-    let event = null;
-    let data = null;
-    for (const line of lines) {
-      if (line.startsWith("event: ")) event = line.slice(7);
-      if (line.startsWith("data: ")) data = JSON.parse(line.slice(6));
-    }
-    return { event, data };
-  });
+function parseSseEvents(raw: string): Array<{ event: string | null; data: Record<string, unknown> | null }> {
+  return raw
+    .trim()
+    .split("\n\n")
+    .filter(Boolean)
+    .map((block) => {
+      let event: string | null = null;
+      let data: Record<string, unknown> | null = null;
+      for (const line of block.split("\n")) {
+        if (line.startsWith("event: ")) event = line.slice(7);
+        if (line.startsWith("data: ")) data = JSON.parse(line.slice(6)) as Record<string, unknown>;
+      }
+      return { event, data };
+    });
 }
 
-test("model catalog parsing and resolution handles exact, Anthropic aliases, and fuzzy slugs", () => {
+test("model catalog parsing and resolution handles exact, Anthropic aliases, DeepSeek, and [1m] variants", () => {
   const catalog = parseConfigCatalog([
     {
       id: "model",
@@ -187,13 +190,16 @@ test("model catalog parsing and resolution handles exact, Anthropic aliases, and
 
   const formatted = formatAnthropicModelsList(catalog.models, "swe-2-1-medium");
   assert.equal(formatted.data.length, 7);
-  assert.equal(formatted.data[0].type, "model");
+  assert.equal(formatted.data[0]?.type, "model");
+  assert.equal(formatted.data[5]?.max_input_tokens, 1_000_000);
+  assert.equal(formatted.data[1]?.line, "opus");
   assert.equal(formatted.has_more, false);
 });
 
 test("end-to-end Anthropic server over fake ACP handles auth, models, JSON, SSE, session continuation, images, and permissions", async () => {
   const fixture = createFakeAcpFixture();
-  const config = {
+  const config: ProxyConfig = {
+    help: false,
     host: "127.0.0.1",
     port: 0,
     devinPath: process.execPath,
@@ -217,35 +223,31 @@ test("end-to-end Anthropic server over fake ACP handles auth, models, JSON, SSE,
   const sessions = new SessionManager(acp, config);
   const server = createProxyServer({ config, acp, sessions });
 
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const { port } = server.address();
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as AddressInfo;
   const baseUrl = `http://127.0.0.1:${port}`;
 
   try {
-    // 1. Auth rejection
     const unauth = await fetch(`${baseUrl}/v1/models`);
     assert.equal(unauth.status, 401);
 
-    // 2. Models list
     const modelsRes = await fetch(`${baseUrl}/v1/models`, {
       headers: { "x-api-key": "secret-key" },
     });
     assert.equal(modelsRes.status, 200);
-    const modelsJson = await modelsRes.json();
-    assert.equal(modelsJson.data.length, 6);
-    assert.equal(modelsJson.data[2].id, "gemini-4-carbon-medium");
+    const modelsJson = (await modelsRes.json()) as AnthropicModelsListResponse;
+    assert.equal(modelsJson.data.length, 5);
+    assert.equal(modelsJson.data[2]?.id, "gemini-4-carbon-medium");
 
-    // 3. Token count
     const countRes = await fetch(`${baseUrl}/v1/messages/count_tokens`, {
       method: "POST",
       headers: { Authorization: "Bearer secret-key", "Content-Type": "application/json" },
       body: JSON.stringify({ model: "swe-2-1-medium", messages: [{ role: "user", content: "hello world" }] }),
     });
     assert.equal(countRes.status, 200);
-    const countJson = await countRes.json();
+    const countJson = (await countRes.json()) as { input_tokens: number };
     assert.ok(countJson.input_tokens > 0);
 
-    // 4. Non-streaming JSON turn 1
     const turn1Res = await fetch(`${baseUrl}/v1/messages`, {
       method: "POST",
       headers: { "x-api-key": "secret-key", "Content-Type": "application/json" },
@@ -258,22 +260,26 @@ test("end-to-end Anthropic server over fake ACP handles auth, models, JSON, SSE,
       }),
     });
     assert.equal(turn1Res.status, 200);
-    const turn1Json = await turn1Res.json();
+    const turn1Json = (await turn1Res.json()) as {
+      type: string;
+      model: string;
+      stop_reason: string;
+      usage: { input_tokens: number; output_tokens: number };
+      content: Array<{ type: string; thinking?: string; text?: string }>;
+    };
     assert.equal(turn1Json.type, "message");
     assert.equal(turn1Json.model, "gemini-4-carbon-medium");
     assert.equal(turn1Json.stop_reason, "end_turn");
     assert.equal(turn1Json.usage.input_tokens, 42);
     assert.equal(turn1Json.usage.output_tokens, 17);
-    assert.equal(turn1Json.content[0].type, "thinking");
-    assert.match(turn1Json.content[0].thinking, /Thinking on gemini-4-carbon-medium/);
-    assert.match(turn1Json.content[0].thinking, /\[Devin tool completed\] Read file/);
-    assert.equal(turn1Json.content[1].type, "text");
-    assert.match(turn1Json.content[1].text, /^sess-2#1 model=gemini-4-carbon-medium mode=bypass thought=max/);
-    assert.match(turn1Json.content[1].text, /<system_instructions>\nBe brief\n<\/system_instructions>/);
+    assert.equal(turn1Json.content[0]?.type, "thinking");
+    assert.match(turn1Json.content[0]?.thinking ?? "", /Thinking on gemini-4-carbon-medium/);
+    assert.match(turn1Json.content[0]?.thinking ?? "", /\[Devin tool completed\] Read file/);
+    assert.equal(turn1Json.content[1]?.type, "text");
+    const firstAssistantText = turn1Json.content[1]?.text ?? "";
+    assert.match(firstAssistantText, /^sess-2#1 model=gemini-4-carbon-medium mode=bypass thought=max/);
+    assert.match(firstAssistantText, /<system_instructions>\nBe brief\n<\/system_instructions>/);
 
-    const firstAssistantText = turn1Json.content[1].text;
-
-    // 5. Streaming SSE turn 2 continues same session (sess-2#2) and switches model dynamically
     const turn2Res = await fetch(`${baseUrl}/v1/messages`, {
       method: "POST",
       headers: { "x-api-key": "secret-key", "Content-Type": "application/json" },
@@ -298,20 +304,21 @@ test("end-to-end Anthropic server over fake ACP handles auth, models, JSON, SSE,
     assert.equal(turn2Res.status, 200);
     const sseRaw = await turn2Res.text();
     const events = parseSseEvents(sseRaw);
-    assert.equal(events[0].event, "message_start");
-    assert.equal(events.at(-1).event, "message_stop");
+    assert.equal(events[0]?.event, "message_start");
+    assert.equal(events.at(-1)?.event, "message_stop");
 
     const textDeltas = events
-      .filter((e) => e.event === "content_block_delta" && e.data?.delta?.type === "text_delta")
-      .map((e) => e.data.delta.text)
+      .filter((e) => e.event === "content_block_delta" && (e.data?.delta as { type?: string } | undefined)?.type === "text_delta")
+      .map((e) => (e.data?.delta as { text: string }).text)
       .join("");
     assert.match(textDeltas, /^sess-2#2 model=claude-opus-5-5-medium/);
     assert.match(textDeltas, /prompt=follow up$/);
 
-    const sigDelta = events.find((e) => e.event === "content_block_delta" && e.data?.delta?.type === "signature_delta");
+    const sigDelta = events.find(
+      (e) => e.event === "content_block_delta" && (e.data?.delta as { type?: string } | undefined)?.type === "signature_delta",
+    );
     assert.ok(sigDelta, "thinking block should emit signature_delta before stop");
 
-    // 6. Permission handling & image attachment check on non-image model
     const permRes = await fetch(`${baseUrl}/v1/messages`, {
       method: "POST",
       headers: { "x-api-key": "secret-key", "Content-Type": "application/json" },
@@ -329,10 +336,10 @@ test("end-to-end Anthropic server over fake ACP handles auth, models, JSON, SSE,
       }),
     });
     assert.equal(permRes.status, 200);
-    const permJson = await permRes.json();
-    assert.equal(permJson.content[0].text, "perm=allow-once");
+    const permJson = (await permRes.json()) as { content: Array<{ text?: string }> };
+    assert.equal(permJson.content[0]?.text, "perm=allow-once");
   } finally {
-    await new Promise((resolve) => server.close(resolve));
+    await new Promise<void>((resolve) => server.close(() => resolve()));
     await sessions.closeAll();
     await acp.shutdown();
     rmSync(fixture.dir, { recursive: true, force: true });

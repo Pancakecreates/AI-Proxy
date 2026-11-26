@@ -1,10 +1,11 @@
 #!/usr/bin/env node
-import { AcpClient } from "./acp-client.mjs";
-import { helpText, loadConfig } from "./config.mjs";
-import { createProxyServer } from "./server.mjs";
-import { SessionManager } from "./sessions.mjs";
+import type { AddressInfo } from "node:net";
+import { AcpClient } from "./acp-client.js";
+import { helpText, loadConfig } from "./config.js";
+import { createProxyServer } from "./server.js";
+import { SessionManager } from "./sessions.js";
 
-async function main() {
+async function main(): Promise<void> {
   const config = loadConfig();
   if (config.help) {
     process.stdout.write(helpText());
@@ -15,7 +16,7 @@ async function main() {
   const sessions = new SessionManager(acp, config);
   const server = createProxyServer({ config, acp, sessions });
 
-  await new Promise((resolve, reject) => {
+  await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(config.port, config.host, () => {
       server.off("error", reject);
@@ -23,7 +24,10 @@ async function main() {
     });
   });
 
-  const baseUrl = `http://${config.host}:${config.port}`;
+  const bound = server.address() as AddressInfo | null;
+  const port = bound?.port ?? config.port;
+  const baseUrl = `http://${config.host}:${port}`;
+
   console.log(`AI-Anthropic-Proxy listening on ${baseUrl}`);
   console.log(`Devin CLI: ${config.devinPath}`);
   console.log(`Workspace CWD: ${config.cwd} (mode: ${config.mode})`);
@@ -32,7 +36,8 @@ async function main() {
     const catalog = await sessions.warmUp();
     console.log(`Devin ACP ready. Loaded ${catalog.models.length} models.`);
   } catch (err) {
-    console.warn(`Warning during Devin warmup (will retry on first request): ${err?.message || err}`);
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(`Warning during Devin warmup (will retry on first request): ${message}`);
   }
 
   console.log(`\nClaude Desktop (Developer Mode -> Configure Third-Party Inference):`);
@@ -48,17 +53,18 @@ async function main() {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log("\nShutting down...");
-    await new Promise((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => server.close(() => resolve()));
     await sessions.closeAll();
     await acp.shutdown();
     process.exit(0);
   };
 
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", () => void shutdown());
+  process.on("SIGTERM", () => void shutdown());
 }
 
-main().catch((err) => {
-  console.error(err?.stack || err?.message || String(err));
+main().catch((err: unknown) => {
+  const message = err instanceof Error ? err.stack ?? err.message : String(err);
+  console.error(message);
   process.exit(1);
 });

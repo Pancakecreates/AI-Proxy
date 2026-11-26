@@ -1,17 +1,20 @@
 import { existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import type { DevinMode, ProcessModel, ProxyConfig, ShowToolsMode, ThoughtLevel } from "./types.js";
 
-const VALID_MODES = new Set(["bypass", "accept-edits", "smart", "ask", "plan"]);
-const VALID_THOUGHT_LEVELS = new Set(["medium", "high", "max"]);
-const VALID_SHOW_TOOLS = new Set(["thinking", "text", "none"]);
-const VALID_PROCESS_MODELS = new Set(["in-process", "daemon"]);
+const VALID_MODES = new Set<DevinMode>(["bypass", "accept-edits", "smart", "ask", "plan"]);
+const VALID_THOUGHT_LEVELS = new Set<ThoughtLevel>(["medium", "high", "max"]);
+const VALID_SHOW_TOOLS = new Set<ShowToolsMode>(["thinking", "text", "none"]);
+const VALID_PROCESS_MODELS = new Set<ProcessModel>(["in-process", "daemon"]);
 
 /**
  * Resolve the Devin CLI executable path automatically from env, OpenBot runtime cache, or PATH.
  */
-export function resolveDevinExecutable(explicitPath) {
-  const candidates = [explicitPath, process.env.DEVIN_PATH, process.env.OPENBOT_DEVIN_PATH].filter(Boolean);
+export function resolveDevinExecutable(explicitPath?: string): string {
+  const candidates = [explicitPath, process.env.DEVIN_PATH, process.env.OPENBOT_DEVIN_PATH].filter(
+    (v): v is string => Boolean(v && v.trim()),
+  );
   for (const candidate of candidates) {
     if (existsSync(candidate)) return resolve(candidate);
   }
@@ -49,34 +52,40 @@ export function resolveDevinExecutable(explicitPath) {
   return exeName;
 }
 
-function parseIntEnv(value, fallback) {
+function parseIntEnv(value: string | undefined, fallback: number): number {
   if (value === undefined || value === "") return fallback;
-  const parsed = Number.parseInt(String(value), 10);
+  const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-function parseBoolEnv(value, fallback) {
+function parseBoolEnv(value: string | undefined, fallback: boolean): boolean {
   if (value === undefined || value === "") return fallback;
-  const norm = String(value).trim().toLowerCase();
+  const norm = value.trim().toLowerCase();
   if (["1", "true", "yes", "on"].includes(norm)) return true;
   if (["0", "false", "no", "off"].includes(norm)) return false;
   return fallback;
 }
 
-function parseJsonMap(raw) {
+function parseJsonMap(raw: string | undefined): Record<string, string> {
   if (!raw) return {};
   try {
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(parsed)) {
+      if (typeof v === "string") out[k] = v;
+    }
+    return out;
   } catch {
     return {};
   }
 }
 
-export function parseCliArgs(argv) {
-  const args = {};
+export function parseCliArgs(argv: readonly string[]): Record<string, string | boolean> {
+  const args: Record<string, string | boolean> = {};
   for (let i = 0; i < argv.length; i += 1) {
     const token = argv[i];
+    if (!token) continue;
     if (token === "--help" || token === "-h") {
       args.help = true;
       continue;
@@ -84,11 +93,12 @@ export function parseCliArgs(argv) {
     if (!token.startsWith("--")) continue;
     const eq = token.indexOf("=");
     const key = eq >= 0 ? token.slice(2, eq) : token.slice(2);
-    let value;
+    let value: string;
+    const nextToken = argv[i + 1];
     if (eq >= 0) {
       value = token.slice(eq + 1);
-    } else if (i + 1 < argv.length && !argv[i + 1].startsWith("--")) {
-      value = argv[i + 1];
+    } else if (nextToken !== undefined && !nextToken.startsWith("--")) {
+      value = nextToken;
       i += 1;
     } else {
       value = "true";
@@ -98,64 +108,77 @@ export function parseCliArgs(argv) {
   return args;
 }
 
-function loadDotEnvIfPresent() {
+function loadDotEnvIfPresent(): void {
   const envFile = resolve(process.cwd(), ".env");
-  if (!existsSync(envFile) || typeof process.loadEnvFile !== "function") return;
+  const nodeProcess = process as typeof process & { loadEnvFile?: (path?: string) => void };
+  if (!existsSync(envFile) || typeof nodeProcess.loadEnvFile !== "function") return;
   try {
-    process.loadEnvFile(envFile);
+    nodeProcess.loadEnvFile(envFile);
   } catch {
     // Ignore malformed optional .env
   }
 }
 
-export function loadConfig(argv = process.argv.slice(2)) {
+function cliString(cli: Record<string, string | boolean>, key: string): string | undefined {
+  const v = cli[key];
+  return typeof v === "string" ? v : undefined;
+}
+
+export function loadConfig(argv: readonly string[] = process.argv.slice(2)): ProxyConfig {
   loadDotEnvIfPresent();
   const cli = parseCliArgs(argv);
-  const mode = String(cli.mode ?? process.env.DEVIN_MODE ?? "bypass").trim();
-  const thoughtLevelRaw = cli["thought-level"] ?? process.env.DEVIN_THOUGHT_LEVEL ?? "";
-  const thoughtLevel = thoughtLevelRaw ? String(thoughtLevelRaw).trim() : null;
-  const showTools = String(cli["show-tools"] ?? process.env.DEVIN_SHOW_TOOLS ?? "thinking").trim();
-  const processModel = String(cli["process-model"] ?? process.env.DEVIN_PROCESS_MODEL ?? "in-process").trim();
+
+  const mode = (cliString(cli, "mode") ?? process.env.DEVIN_MODE ?? "bypass").trim() as DevinMode;
+  const thoughtLevelRaw = (cliString(cli, "thought-level") ?? process.env.DEVIN_THOUGHT_LEVEL ?? "").trim();
+  const thoughtLevel = (thoughtLevelRaw || null) as ThoughtLevel | null;
+  const showTools = (cliString(cli, "show-tools") ?? process.env.DEVIN_SHOW_TOOLS ?? "thinking").trim() as ShowToolsMode;
+  const processModel = (cliString(cli, "process-model") ?? process.env.DEVIN_PROCESS_MODEL ?? "in-process").trim() as ProcessModel;
 
   if (!VALID_MODES.has(mode)) {
     throw new Error(`Invalid DEVIN_MODE "${mode}". Expected one of: ${[...VALID_MODES].join(", ")}`);
   }
   if (thoughtLevel && !VALID_THOUGHT_LEVELS.has(thoughtLevel)) {
-    throw new Error(`Invalid DEVIN_THOUGHT_LEVEL "${thoughtLevel}". Expected one of: ${[...VALID_THOUGHT_LEVELS].join(", ")}`);
+    throw new Error(
+      `Invalid DEVIN_THOUGHT_LEVEL "${thoughtLevel}". Expected one of: ${[...VALID_THOUGHT_LEVELS].join(", ")}`,
+    );
   }
   if (!VALID_SHOW_TOOLS.has(showTools)) {
     throw new Error(`Invalid DEVIN_SHOW_TOOLS "${showTools}". Expected one of: ${[...VALID_SHOW_TOOLS].join(", ")}`);
   }
   if (!VALID_PROCESS_MODELS.has(processModel)) {
-    throw new Error(`Invalid DEVIN_PROCESS_MODEL "${processModel}". Expected one of: ${[...VALID_PROCESS_MODELS].join(", ")}`);
+    throw new Error(
+      `Invalid DEVIN_PROCESS_MODEL "${processModel}". Expected one of: ${[...VALID_PROCESS_MODELS].join(", ")}`,
+    );
   }
 
   return {
     help: Boolean(cli.help),
-    host: String(cli.host ?? process.env.HOST ?? "127.0.0.1").trim(),
-    port: parseIntEnv(cli.port ?? process.env.PORT, 8787),
-    devinPath: resolveDevinExecutable(cli["devin-path"]),
-    cwd: resolve(String(cli.cwd ?? process.env.DEVIN_CWD ?? homedir())),
+    host: (cliString(cli, "host") ?? process.env.HOST ?? "127.0.0.1").trim(),
+    port: parseIntEnv(cliString(cli, "port") ?? process.env.PORT, 8787),
+    devinPath: resolveDevinExecutable(cliString(cli, "devin-path")),
+    cwd: resolve((cliString(cli, "cwd") ?? process.env.DEVIN_CWD ?? homedir()).trim()),
     mode,
-    defaultModel: String(cli.model ?? process.env.DEVIN_MODEL ?? "swe-2-1-medium").trim(),
+    defaultModel: (cliString(cli, "model") ?? process.env.DEVIN_MODEL ?? "swe-2-1-medium").trim(),
     thoughtLevel,
     showTools,
     processModel,
-    apiKey: String(cli["api-key"] ?? process.env.PROXY_API_KEY ?? "").trim() || null,
+    apiKey: (cliString(cli, "api-key") ?? process.env.PROXY_API_KEY ?? "").trim() || null,
     modelMap: parseJsonMap(process.env.DEVIN_MODEL_MAP),
-    requestTimeoutMs: parseIntEnv(cli["request-timeout-ms"] ?? process.env.DEVIN_REQUEST_TIMEOUT_MS, 600_000),
-    startupTimeoutMs: parseIntEnv(cli["startup-timeout-ms"] ?? process.env.DEVIN_STARTUP_TIMEOUT_MS, 45_000),
-    idleSessionTtlMs: parseIntEnv(cli["idle-ttl-ms"] ?? process.env.DEVIN_IDLE_SESSION_TTL_MS, 30 * 60_000),
-    maxSessions: parseIntEnv(cli["max-sessions"] ?? process.env.DEVIN_MAX_SESSIONS, 12),
-    debug: parseBoolEnv(cli.debug ?? process.env.DEVIN_PROXY_DEBUG, false),
+    requestTimeoutMs: parseIntEnv(cliString(cli, "request-timeout-ms") ?? process.env.DEVIN_REQUEST_TIMEOUT_MS, 600_000),
+    startupTimeoutMs: parseIntEnv(cliString(cli, "startup-timeout-ms") ?? process.env.DEVIN_STARTUP_TIMEOUT_MS, 45_000),
+    idleSessionTtlMs: parseIntEnv(cliString(cli, "idle-ttl-ms") ?? process.env.DEVIN_IDLE_SESSION_TTL_MS, 30 * 60_000),
+    maxSessions: parseIntEnv(cliString(cli, "max-sessions") ?? process.env.DEVIN_MAX_SESSIONS, 12),
+    debug: parseBoolEnv(cliString(cli, "debug") ?? process.env.DEVIN_PROXY_DEBUG, false),
   };
 }
 
-export function helpText() {
+export function helpText(): string {
   return `AI-Anthropic-Proxy - Local Anthropic Messages API proxy over devin acp
 
 Usage:
-  node src/index.mjs [options]
+  npm start -- [options]
+  npm run dev -- [options]
+  node dist/index.js [options]
 
 Options:
   --port <port>              HTTP listen port (default: 8787, env: PORT)
