@@ -53,6 +53,50 @@ export function resolveDevinExecutable(explicitPath?: string): string {
   return exeName;
 }
 
+/**
+ * Resolve the Antigravity (Gemini) CLI executable path from env or OpenBot runtime cache.
+ */
+export function resolveAntigravityExecutable(explicitPath?: string): string | undefined {
+  const candidates = [explicitPath, process.env.ANTIGRAVITY_PATH, process.env.OPENBOT_ANTIGRAVITY_PATH].filter(
+    (v): v is string => Boolean(v && v.trim()),
+  );
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return resolve(candidate);
+  }
+
+  const platformDir =
+    process.platform === "win32"
+      ? "win32-x64"
+      : process.platform === "darwin"
+        ? process.arch === "arm64"
+          ? "darwin-arm64"
+          : "darwin-x64"
+        : process.arch === "arm64"
+          ? "linux-arm64"
+          : "linux-x64";
+  const exeName = process.platform === "win32" ? "antigravity.exe" : "antigravity";
+
+  const appData =
+    process.env.APPDATA ||
+    (process.platform === "darwin"
+      ? join(homedir(), "Library", "Application Support")
+      : join(homedir(), ".config"));
+
+  const runtimeRoot = join(appData, "OpenBot", "provider-runtimes", "antigravity", platformDir);
+  if (existsSync(runtimeRoot)) {
+    const versions = readdirSync(runtimeRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+      .map((entry) => entry.name)
+      .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+    for (const version of versions) {
+      const candidate = join(runtimeRoot, version, "bin", exeName);
+      if (existsSync(candidate)) return resolve(candidate);
+    }
+  }
+
+  return undefined;
+}
+
 function parseIntEnv(value: string | undefined, fallback: number): number {
   if (value === undefined || value === "") return fallback;
   const parsed = Number.parseInt(value, 10);
@@ -181,6 +225,9 @@ export function loadConfig(argv: readonly string[] = process.argv.slice(2)): Pro
     idleSessionTtlMs: parseIntEnv(cliString(cli, "idle-ttl-ms") ?? process.env.DEVIN_IDLE_SESSION_TTL_MS, 30 * 60_000),
     maxSessions: parseIntEnv(cliString(cli, "max-sessions") ?? process.env.DEVIN_MAX_SESSIONS, 12),
     debug: parseBoolEnv(cliString(cli, "debug") ?? process.env.DEVIN_PROXY_DEBUG, false),
+    antigravityPath: resolveAntigravityExecutable(cliString(cli, "antigravity-path")),
+    antigravityGeminiDir: (cliString(cli, "antigravity-gemini-dir") ?? process.env.ANTIGRAVITY_GEMINI_DIR ?? "").trim() || undefined,
+    antigravityAppDataDir: (cliString(cli, "antigravity-app-data-dir") ?? process.env.ANTIGRAVITY_APP_DATA_DIR ?? "").trim() || undefined,
   };
 }
 
@@ -206,5 +253,8 @@ Options:
   --api-key <key>            Require Bearer / x-api-key auth (optional, env: PROXY_API_KEY)
   --no-gateway-aliases       Serve raw non-Claude IDs in /v1/models (env: DEVIN_GATEWAY_ALIASES=false)
   --debug                    Verbose ACP/HTTP debug logs (env: DEVIN_PROXY_DEBUG=1)
+  --antigravity-path <path>  Path to antigravity CLI (auto-detected from OpenBot runtimes if omitted)
+  --antigravity-gemini-dir   Path to Gemini credentials directory (env: ANTIGRAVITY_GEMINI_DIR)
+  --antigravity-app-data-dir Path to antigravity app-data directory (env: ANTIGRAVITY_APP_DATA_DIR)
 `;
 }

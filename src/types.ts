@@ -25,6 +25,12 @@ export interface ProxyConfig {
   idleSessionTtlMs: number;
   maxSessions: number;
   debug: boolean;
+  /** Path to the antigravity CLI executable (optional; enables Gemini backend). */
+  antigravityPath?: string;
+  /** Path to the Gemini credentials directory (--gemini-dir flag). */
+  antigravityGeminiDir?: string;
+  /** Path to the antigravity ACP app-data directory (--app-data-dir flag). */
+  antigravityAppDataDir?: string;
 }
 
 export interface AcpJsonRpcError {

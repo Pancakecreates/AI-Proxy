@@ -24,6 +24,18 @@ const GATEWAY_ALIAS_PREFIX = "claude-fable-acp-";
 const GATEWAY_SAFE_HEX_PREFIX = "h-";
 const SAFE_HEX_ALPHABET = "0123456789cfjquw";
 const CLAUDE_TIER_KEYWORDS = ["sonnet", "opus", "haiku", "fable", "mythos"] as const;
+const CLAUDE_TIER_DISPLAY_RE = /^(opus|sonnet|haiku|fable|mythos)\b/i;
+
+/**
+ * Normalize a model display name that Devin returns without the "Claude" brand prefix.
+ * Example: "Opus 4.6" → "Claude Opus 4.6", "Claude Opus 4.6 Thinking" is left unchanged.
+ */
+function normalizeTierDisplayName(name: string): string {
+  if (CLAUDE_TIER_DISPLAY_RE.test(name) && !/^claude\b/i.test(name)) {
+    return `Claude ${name}`;
+  }
+  return name;
+}
 const CLAUDE_ALLOWED_KEYWORDS = ["claude", ...CLAUDE_TIER_KEYWORDS, "anthropic"] as const;
 const GATEWAY_TIER_EXACT_RE = /^(sonnet|opus|haiku|fable|mythos)(-[\d.]+)?$/;
 const NON_ANTHROPIC_BLOCKLIST_RE =
@@ -131,7 +143,7 @@ export function parseConfigCatalog(configOptions: readonly AcpConfigOption[] | u
       result.currentModel = typeof option.currentValue === "string" ? option.currentValue : null;
       result.models = entries.map((entry) => ({
         id: entry.value,
-        name: entry.name || entry.value,
+        name: normalizeTierDisplayName(entry.name || entry.value),
         supportsImages: Boolean(entry._meta?.["cognition.ai/supportsImages"]),
       }));
     } else if (option.id === "mode") {
