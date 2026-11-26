@@ -1,5 +1,6 @@
 export type DevinMode = "bypass" | "accept-edits" | "smart" | "ask" | "plan";
-export type ThoughtLevel = "medium" | "high" | "max";
+export type ThoughtLevel = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+export type SpeedMode = "standard" | "fast" | "ultrafast";
 export type ShowToolsMode = "thinking" | "text" | "none";
 export type ProcessModel = "in-process" | "daemon";
 
@@ -13,6 +14,7 @@ export interface ProxyConfig {
   mode: DevinMode;
   defaultModel: string;
   thoughtLevel: ThoughtLevel | null;
+  speed: SpeedMode | null;
   showTools: ShowToolsMode;
   processModel: ProcessModel;
   apiKey: string | null;
@@ -126,11 +128,11 @@ export interface ConfigCatalog {
   models: DevinModelEntry[];
   modes: DevinMode[];
   thoughtLevels: ThoughtLevel[];
-  speeds: string[];
+  speeds: SpeedMode[];
   currentModel: string | null;
   currentMode: DevinMode | null;
   currentThoughtLevel: ThoughtLevel | null;
-  currentSpeed: string | null;
+  currentSpeed: SpeedMode | null;
 }
 
 export type AnthropicModelLine = "opus" | "sonnet" | "haiku" | "fable";
@@ -186,6 +188,10 @@ export interface AnthropicThinkingConfig {
   budget_tokens?: number;
 }
 
+export interface AnthropicOutputConfig {
+  effort?: string;
+}
+
 export interface AnthropicMessagesRequest {
   model?: string;
   messages: AnthropicMessageParam[];
@@ -193,6 +199,7 @@ export interface AnthropicMessagesRequest {
   max_tokens?: number;
   stream?: boolean;
   thinking?: AnthropicThinkingConfig;
+  output_config?: AnthropicOutputConfig;
   tools?: unknown[];
 }
 

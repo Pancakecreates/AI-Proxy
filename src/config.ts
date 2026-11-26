@@ -1,10 +1,11 @@
 import { existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import type { DevinMode, ProcessModel, ProxyConfig, ShowToolsMode, ThoughtLevel } from "./types.js";
+import type { DevinMode, ProcessModel, ProxyConfig, ShowToolsMode, SpeedMode, ThoughtLevel } from "./types.js";
 
 const VALID_MODES = new Set<DevinMode>(["bypass", "accept-edits", "smart", "ask", "plan"]);
-const VALID_THOUGHT_LEVELS = new Set<ThoughtLevel>(["medium", "high", "max"]);
+const VALID_THOUGHT_LEVELS = new Set<ThoughtLevel>(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
+const VALID_SPEEDS = new Set<SpeedMode>(["standard", "fast", "ultrafast"]);
 const VALID_SHOW_TOOLS = new Set<ShowToolsMode>(["thinking", "text", "none"]);
 const VALID_PROCESS_MODELS = new Set<ProcessModel>(["in-process", "daemon"]);
 
@@ -129,8 +130,10 @@ export function loadConfig(argv: readonly string[] = process.argv.slice(2)): Pro
   const cli = parseCliArgs(argv);
 
   const mode = (cliString(cli, "mode") ?? process.env.DEVIN_MODE ?? "bypass").trim() as DevinMode;
-  const thoughtLevelRaw = (cliString(cli, "thought-level") ?? process.env.DEVIN_THOUGHT_LEVEL ?? "").trim();
+  const thoughtLevelRaw = (cliString(cli, "thought-level") ?? process.env.DEVIN_THOUGHT_LEVEL ?? "").trim().toLowerCase();
   const thoughtLevel = (thoughtLevelRaw || null) as ThoughtLevel | null;
+  const speedRaw = (cliString(cli, "speed") ?? process.env.DEVIN_SPEED ?? "").trim().toLowerCase();
+  const speed = (speedRaw || null) as SpeedMode | null;
   const showTools = (cliString(cli, "show-tools") ?? process.env.DEVIN_SHOW_TOOLS ?? "thinking").trim() as ShowToolsMode;
   const processModel = (cliString(cli, "process-model") ?? process.env.DEVIN_PROCESS_MODEL ?? "in-process").trim() as ProcessModel;
 
@@ -141,6 +144,9 @@ export function loadConfig(argv: readonly string[] = process.argv.slice(2)): Pro
     throw new Error(
       `Invalid DEVIN_THOUGHT_LEVEL "${thoughtLevel}". Expected one of: ${[...VALID_THOUGHT_LEVELS].join(", ")}`,
     );
+  }
+  if (speed && !VALID_SPEEDS.has(speed)) {
+    throw new Error(`Invalid DEVIN_SPEED "${speed}". Expected one of: ${[...VALID_SPEEDS].join(", ")}`);
   }
   if (!VALID_SHOW_TOOLS.has(showTools)) {
     throw new Error(`Invalid DEVIN_SHOW_TOOLS "${showTools}". Expected one of: ${[...VALID_SHOW_TOOLS].join(", ")}`);
@@ -160,6 +166,7 @@ export function loadConfig(argv: readonly string[] = process.argv.slice(2)): Pro
     mode,
     defaultModel: (cliString(cli, "model") ?? process.env.DEVIN_MODEL ?? "swe-2-1-medium").trim(),
     thoughtLevel,
+    speed,
     showTools,
     processModel,
     apiKey: (cliString(cli, "api-key") ?? process.env.PROXY_API_KEY ?? "").trim() || null,
@@ -186,7 +193,8 @@ Options:
   --cwd <path>               Default workspace directory for Devin sessions (env: DEVIN_CWD)
   --mode <mode>              Devin ACP mode: bypass | accept-edits | smart | ask | plan (default: bypass)
   --model <model>            Fallback Devin model id when client sends unknown id (default: swe-2-1-medium)
-  --thought-level <level>    Default thought level: medium | high | max (env: DEVIN_THOUGHT_LEVEL)
+  --thought-level <level>    Default effort: none | low | medium | high | xhigh | max (env: DEVIN_THOUGHT_LEVEL)
+  --speed <speed>            Default speed: standard | fast | ultrafast (env: DEVIN_SPEED)
   --show-tools <mode>        Show tool calls in: thinking | text | none (default: thinking)
   --process-model <mode>     Devin process model: in-process | daemon (default: in-process)
   --devin-path <path>        Explicit path to devin executable (env: DEVIN_PATH)

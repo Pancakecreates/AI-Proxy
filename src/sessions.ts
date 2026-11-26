@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { type AcpClient, AcpRpcError } from "./acp-client.js";
-import { parseConfigCatalog, resolveDevinModel, resolveThoughtLevel } from "./models.js";
+import { parseConfigCatalog, resolveDevinModelWithHints, resolveSpeed, resolveThoughtLevel } from "./models.js";
 import type {
   AcpConfigOption,
   AcpContentBlock,
@@ -11,6 +11,7 @@ import type {
   ConfigCatalog,
   DevinMode,
   ProxyConfig,
+  SpeedMode,
   ThoughtLevel,
   TurnResult,
   TurnUsage,
@@ -29,6 +30,9 @@ interface SessionRecord {
   model: string | null;
   mode: DevinMode | null;
   thoughtLevel: ThoughtLevel | null;
+  speed: SpeedMode | null;
+  supportedThoughtLevels: ThoughtLevel[];
+  supportedSpeeds: SpeedMode[];
   busy: boolean;
   lastUsedAt: number;
 }
@@ -222,6 +226,18 @@ export class SessionManager {
     }
   }
 
+  #applySessionConfigSnapshot(session: SessionRecord, configOptions: readonly AcpConfigOption[] | undefined): void {
+    if (!Array.isArray(configOptions) || configOptions.length === 0) return;
+    this.#updateCatalog(configOptions);
+    const parsed = parseConfigCatalog(configOptions);
+    if (parsed.currentMode) session.mode = parsed.currentMode;
+    if (parsed.currentModel) session.model = parsed.currentModel;
+    if (parsed.currentThoughtLevel) session.thoughtLevel = parsed.currentThoughtLevel;
+    if (parsed.currentSpeed) session.speed = parsed.currentSpeed;
+    if (parsed.thoughtLevels.length > 0) session.supportedThoughtLevels = parsed.thoughtLevels;
+    if (parsed.speeds.length > 0) session.supportedSpeeds = parsed.speeds;
+  }
+
   #findMatchingSession(params: {
     cwd: string;
     systemHash: string;
@@ -285,6 +301,9 @@ export class SessionManager {
       model: localCatalog.currentModel,
       mode: localCatalog.currentMode,
       thoughtLevel: localCatalog.currentThoughtLevel,
+      speed: localCatalog.currentSpeed,
+      supportedThoughtLevels: localCatalog.thoughtLevels,
+      supportedSpeeds: localCatalog.speeds,
       busy: false,
       lastUsedAt: Date.now(),
     };
@@ -294,22 +313,43 @@ export class SessionManager {
 
   async #configureSession(
     session: SessionRecord,
-    settings: { targetModel: string; mode: DevinMode; thoughtLevel: ThoughtLevel | null },
+    request: AnthropicMessagesRequest,
+    selection: { targetModel: string; requestedEffort: ThoughtLevel | null; requestedSpeed: SpeedMode | null },
   ): Promise<void> {
-    if (settings.mode && session.mode !== settings.mode) {
-      const updated = await this.#acp.setConfigOption(session.id, "mode", settings.mode);
-      this.#updateCatalog(updated.configOptions);
-      session.mode = settings.mode;
+    if (this.#config.mode && session.mode !== this.#config.mode) {
+      const updated = await this.#acp.setConfigOption(session.id, "mode", this.#config.mode);
+      this.#applySessionConfigSnapshot(session, updated.configOptions);
+      session.mode = this.#config.mode;
     }
-    if (settings.targetModel && session.model !== settings.targetModel) {
-      const updated = await this.#acp.setConfigOption(session.id, "model", settings.targetModel);
-      this.#updateCatalog(updated.configOptions);
-      session.model = settings.targetModel;
+
+    if (selection.targetModel && session.model !== selection.targetModel) {
+      const updated = await this.#acp.setConfigOption(session.id, "model", selection.targetModel);
+      this.#applySessionConfigSnapshot(session, updated.configOptions);
+      session.model = selection.targetModel;
     }
-    if (settings.thoughtLevel && session.thoughtLevel !== settings.thoughtLevel) {
-      const updated = await this.#acp.setConfigOption(session.id, "thought_level", settings.thoughtLevel);
-      this.#updateCatalog(updated.configOptions);
-      session.thoughtLevel = settings.thoughtLevel;
+
+    const supportedEfforts =
+      session.supportedThoughtLevels.length > 0 ? session.supportedThoughtLevels : this.#catalog.thoughtLevels;
+    const targetEffort = resolveThoughtLevel(
+      {
+        requestedEffort: selection.requestedEffort,
+        outputConfig: request.output_config,
+        thinking: request.thinking,
+        defaultThoughtLevel: this.#config.thoughtLevel,
+      },
+      supportedEfforts,
+    );
+    if (targetEffort && session.thoughtLevel !== targetEffort) {
+      const updated = await this.#acp.setConfigOption(session.id, "thought_level", targetEffort);
+      this.#applySessionConfigSnapshot(session, updated.configOptions);
+      session.thoughtLevel = targetEffort;
+    }
+
+    const targetSpeed = resolveSpeed(selection.requestedSpeed, this.#config.speed, session.supportedSpeeds);
+    if (targetSpeed && session.speed !== targetSpeed) {
+      const updated = await this.#acp.setConfigOption(session.id, "speed", targetSpeed);
+      this.#applySessionConfigSnapshot(session, updated.configOptions);
+      session.speed = targetSpeed;
     }
   }
 
@@ -328,15 +368,10 @@ export class SessionManager {
     const messages = Array.isArray(request.messages) ? request.messages : [];
     const fingerprints = messages.map(messageFingerprint);
 
-    const resolvedModel = resolveDevinModel(request.model, this.#catalog.models, {
+    const selection = resolveDevinModelWithHints(request.model, this.#catalog.models, {
       defaultModel: this.#config.defaultModel,
       modelMap: this.#config.modelMap,
     });
-    const thoughtLevel = resolveThoughtLevel(
-      request.thinking,
-      this.#config.thoughtLevel,
-      this.#catalog.thoughtLevels,
-    );
 
     let session = this.#findMatchingSession({ cwd, systemHash, fingerprints });
     let isFreshSession = false;
@@ -357,7 +392,7 @@ export class SessionManager {
         systemText,
         messages: deltaMessages,
         includeSystem: isFreshSession,
-        supportsImages: resolvedModel.supportsImages,
+        supportsImages: selection.model.supportsImages,
       });
 
       let assistantText = "";
@@ -368,7 +403,7 @@ export class SessionManager {
         const kind = update.sessionUpdate;
 
         if (kind === "config_option_update") {
-          this.#updateCatalog(update.configOptions);
+          this.#applySessionConfigSnapshot(session, update.configOptions);
           return;
         }
         if (kind === "usage_update") {
@@ -410,10 +445,10 @@ export class SessionManager {
       signal?.addEventListener("abort", onAbort, { once: true });
 
       try {
-        await this.#configureSession(session, {
-          targetModel: resolvedModel.id,
-          mode: this.#config.mode,
-          thoughtLevel,
+        await this.#configureSession(session, request, {
+          targetModel: selection.model.id,
+          requestedEffort: selection.requestedEffort,
+          requestedSpeed: selection.requestedSpeed,
         });
 
         const promptResult = await this.#acp.prompt(session.id, promptBlocks, { signal });
@@ -422,7 +457,7 @@ export class SessionManager {
         session.lastUsedAt = Date.now();
 
         return {
-          modelId: resolvedModel.id,
+          modelId: selection.model.id,
           stopReason: mapStopReason(promptResult.stopReason),
           usage: {
             inputTokens: promptResult.usage?.inputTokens ?? 0,

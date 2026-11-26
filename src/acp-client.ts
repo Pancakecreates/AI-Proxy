@@ -17,7 +17,7 @@ import type {
 const CLIENT_INFO = {
   name: "ai-anthropic-proxy",
   title: "AI-Anthropic-Proxy",
-  version: "1.1.0",
+  version: "1.2.0",
 } as const;
 
 const CLIENT_CAPABILITIES = {

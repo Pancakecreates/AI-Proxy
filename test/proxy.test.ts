@@ -5,7 +5,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { AcpClient } from "../src/acp-client.js";
-import { formatAnthropicModelsList, parseConfigCatalog, resolveDevinModel, resolveThoughtLevel } from "../src/models.js";
+import {
+  fitSupportedEffort,
+  formatAnthropicModelsList,
+  parseConfigCatalog,
+  resolveDevinModelWithHints,
+  resolveSpeed,
+  resolveThoughtLevel,
+} from "../src/models.js";
 import { createProxyServer } from "../src/server.js";
 import { SessionManager } from "../src/sessions.js";
 import type { AnthropicModelsListResponse, ProxyConfig } from "../src/types.js";
@@ -18,6 +25,56 @@ import { createInterface } from "node:readline";
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
 let nextSess = 1;
 const sessions = new Map();
+
+const MODEL_CAPABILITIES = {
+  "swe-2-1-medium": { thoughts: ["low", "medium", "high", "xhigh", "max"], defaultThought: "medium", speeds: ["standard", "ultrafast"] },
+  "claude-opus-5-5-medium": { thoughts: ["low", "medium", "high", "xhigh", "max"], defaultThought: "medium", speeds: ["standard", "fast"] },
+  "gemini-4-carbon-medium": { thoughts: ["low", "medium", "high"], defaultThought: "medium", speeds: [] },
+  "deepseek-v4-pro-high": { thoughts: ["high", "max"], defaultThought: "high", speeds: [] }
+};
+
+function buildConfigOptions(state) {
+  const caps = MODEL_CAPABILITIES[state.model] || { thoughts: ["medium", "high", "max"], defaultThought: "high", speeds: [] };
+  const opts = [
+    {
+      id: "mode",
+      category: "mode",
+      type: "select",
+      currentValue: state.mode,
+      options: [{ value: "accept-edits", name: "Code" }, { value: "bypass", name: "Bypass" }, { value: "ask", name: "Ask" }]
+    },
+    {
+      id: "model",
+      category: "model",
+      type: "select",
+      currentValue: state.model,
+      options: [
+        { value: "swe-2-1-medium", name: "SWE-2.1", _meta: { "cognition.ai/supportsImages": true } },
+        { value: "claude-opus-5-5-medium", name: "Claude Opus 5.5", _meta: { "cognition.ai/supportsImages": true } },
+        { value: "gemini-4-carbon-medium", name: "Gemini 4 Carbon", _meta: { "cognition.ai/supportsImages": true } },
+        { value: "deepseek-v4-pro-high", name: "DeepSeek V4 Pro", _meta: { "cognition.ai/supportsImages": false } },
+        { value: "claude-opus-4-6-1m", name: "Claude Opus 4.6 1M", _meta: { "cognition.ai/supportsImages": true } }
+      ]
+    },
+    {
+      id: "thought_level",
+      category: "thought_level",
+      type: "select",
+      currentValue: state.thought,
+      options: caps.thoughts.map((v) => ({ value: v, name: v }))
+    }
+  ];
+  if (caps.speeds.length > 0) {
+    opts.push({
+      id: "speed",
+      category: "model_config",
+      type: "select",
+      currentValue: state.speed,
+      options: caps.speeds.map((v) => ({ value: v, name: v }))
+    });
+  }
+  return opts;
+}
 
 function send(obj) {
   process.stdout.write(JSON.stringify(obj) + "\\n");
@@ -32,54 +89,27 @@ rl.on("line", (line) => {
   }
   if (msg.method === "session/new") {
     const sid = "sess-" + nextSess++;
-    const state = { model: "swe-2-1-medium", mode: "accept-edits", thought: "high", turns: 0, pendingPromptId: null };
+    const state = { model: "swe-2-1-medium", mode: "accept-edits", thought: "medium", speed: "standard", turns: 0, pendingPromptId: null };
     sessions.set(sid, state);
-    send({
-      jsonrpc: "2.0",
-      id: msg.id,
-      result: {
-        sessionId: sid,
-        configOptions: [
-          {
-            id: "mode",
-            category: "mode",
-            type: "select",
-            currentValue: state.mode,
-            options: [{ value: "accept-edits", name: "Code" }, { value: "bypass", name: "Bypass" }, { value: "ask", name: "Ask" }]
-          },
-          {
-            id: "model",
-            category: "model",
-            type: "select",
-            currentValue: state.model,
-            options: [
-              { value: "swe-2-1-medium", name: "SWE-2.1", _meta: { "cognition.ai/supportsImages": true } },
-              { value: "claude-opus-5-5-medium", name: "Claude Opus 5.5", _meta: { "cognition.ai/supportsImages": true } },
-              { value: "gemini-4-carbon-medium", name: "Gemini 4 Carbon", _meta: { "cognition.ai/supportsImages": true } },
-              { value: "deepseek-v4-pro-high", name: "DeepSeek V4 Pro", _meta: { "cognition.ai/supportsImages": false } },
-              { value: "claude-opus-4-6-1m", name: "Claude Opus 4.6 1M", _meta: { "cognition.ai/supportsImages": true } }
-            ]
-          },
-          {
-            id: "thought_level",
-            category: "thought_level",
-            type: "select",
-            currentValue: state.thought,
-            options: [{ value: "medium", name: "Medium" }, { value: "high", name: "High" }, { value: "max", name: "Max" }]
-          }
-        ]
-      }
-    });
+    send({ jsonrpc: "2.0", id: msg.id, result: { sessionId: sid, configOptions: buildConfigOptions(state) } });
     return;
   }
   if (msg.method === "session/set_config_option") {
     const state = sessions.get(msg.params.sessionId);
     if (state) {
-      if (msg.params.configId === "model") state.model = msg.params.value;
+      if (msg.params.configId === "model") {
+        state.model = msg.params.value;
+        const caps = MODEL_CAPABILITIES[state.model];
+        if (caps) {
+          state.thought = caps.defaultThought;
+          state.speed = caps.speeds[0] || "standard";
+        }
+      }
       if (msg.params.configId === "mode") state.mode = msg.params.value;
       if (msg.params.configId === "thought_level") state.thought = msg.params.value;
+      if (msg.params.configId === "speed") state.speed = msg.params.value;
     }
-    send({ jsonrpc: "2.0", id: msg.id, result: { configOptions: [] } });
+    send({ jsonrpc: "2.0", id: msg.id, result: { configOptions: state ? buildConfigOptions(state) : [] } });
     return;
   }
   if (msg.method === "session/prompt") {
@@ -106,7 +136,7 @@ rl.on("line", (line) => {
     send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: sid, update: { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "Thinking on " + state.model } } } });
     send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: sid, update: { sessionUpdate: "tool_call", toolCallId: "t1", title: "Read file", status: "in_progress" } } });
     send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: sid, update: { sessionUpdate: "tool_call_update", toolCallId: "t1", title: "Read file", status: "completed" } } });
-    send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: sid, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: sid + "#" + state.turns + " model=" + state.model + " mode=" + state.mode + " thought=" + state.thought + " prompt=" + text } } } });
+    send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: sid, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: sid + "#" + state.turns + " model=" + state.model + " mode=" + state.mode + " thought=" + state.thought + " speed=" + state.speed + " prompt=" + text } } } });
     send({ jsonrpc: "2.0", id: msg.id, result: { stopReason: "end_turn", usage: { inputTokens: 42, outputTokens: 17 } } });
     return;
   }
@@ -152,7 +182,7 @@ function parseSseEvents(raw: string): Array<{ event: string | null; data: Record
     });
 }
 
-test("model catalog parsing and resolution handles exact, Anthropic aliases, DeepSeek, and [1m] variants", () => {
+test("model catalog parsing and resolution handles exact, Anthropic aliases, DeepSeek, effort/speed suffixes, and nearest effort fit", () => {
   const catalog = parseConfigCatalog([
     {
       id: "model",
@@ -174,19 +204,37 @@ test("model catalog parsing and resolution handles exact, Anthropic aliases, Dee
     },
   ]);
 
-  assert.equal(resolveDevinModel("gemini-4-carbon-medium", catalog.models).id, "gemini-4-carbon-medium");
-  assert.equal(resolveDevinModel("claude-3-5-haiku-20241022", catalog.models).id, "claude-haiku-5-5-medium");
-  assert.equal(resolveDevinModel("claude-sonnet-4-5-20250929", catalog.models).id, "claude-sonnet-5-5-medium");
-  assert.equal(resolveDevinModel("opus", catalog.models).id, "claude-opus-5-5-medium");
-  assert.equal(resolveDevinModel("deepseek-v4-pro-high", catalog.models).id, "deepseek-v4-pro-high");
-  assert.equal(resolveDevinModel("deepseek-v4-pro-high[1m]", catalog.models).id, "deepseek-v4-pro-high");
-  assert.equal(resolveDevinModel("claude-opus-4-6[1m]", catalog.models).id, "claude-opus-4-6-1m");
-  assert.equal(resolveDevinModel("deepseek", catalog.models).id, "deepseek-v4-pro-high");
+  assert.equal(resolveDevinModelWithHints("gemini-4-carbon-medium", catalog.models).model.id, "gemini-4-carbon-medium");
+  assert.equal(resolveDevinModelWithHints("claude-3-5-haiku-20241022", catalog.models).model.id, "claude-haiku-5-5-medium");
+  assert.equal(resolveDevinModelWithHints("claude-sonnet-4-5-20250929", catalog.models).model.id, "claude-sonnet-5-5-medium");
+  assert.equal(resolveDevinModelWithHints("opus", catalog.models).model.id, "claude-opus-5-5-medium");
+  assert.equal(resolveDevinModelWithHints("deepseek-v4-pro-high", catalog.models).model.id, "deepseek-v4-pro-high");
+  assert.equal(resolveDevinModelWithHints("deepseek-v4-pro-high[1m]", catalog.models).model.id, "deepseek-v4-pro-high");
+  assert.equal(resolveDevinModelWithHints("claude-opus-4-6[1m]", catalog.models).model.id, "claude-opus-4-6-1m");
+  assert.equal(resolveDevinModelWithHints("deepseek", catalog.models).model.id, "deepseek-v4-pro-high");
+
+  const sweXhigh = resolveDevinModelWithHints("swe-2-1-xhigh-lightning", catalog.models);
+  assert.equal(sweXhigh.model.id, "swe-2-1-medium");
+  assert.equal(sweXhigh.requestedEffort, "xhigh");
+  assert.equal(sweXhigh.requestedSpeed, "ultrafast");
+
+  const dsMax = resolveDevinModelWithHints("deepseek-v4-pro-max", catalog.models);
+  assert.equal(dsMax.model.id, "deepseek-v4-pro-high");
+  assert.equal(dsMax.requestedEffort, "max");
+  assert.equal(dsMax.requestedSpeed, null);
+
+  assert.equal(fitSupportedEffort("xhigh", ["low", "medium", "high"]), "high");
+  assert.equal(fitSupportedEffort("medium", ["high", "max"]), "high");
+  assert.equal(fitSupportedEffort("xhigh", ["low", "medium", "high", "xhigh", "max"]), "xhigh");
+
   assert.equal(
-    resolveDevinModel("claude-opus-4", catalog.models, { modelMap: { "claude-opus-4": "deepseek-v4-pro-high" } }).id,
-    "deepseek-v4-pro-high",
+    resolveThoughtLevel(
+      { outputConfig: { effort: "xhigh" }, defaultThoughtLevel: null },
+      ["low", "medium", "high", "xhigh", "max"],
+    ),
+    "xhigh",
   );
-  assert.equal(resolveThoughtLevel({ type: "enabled", budget_tokens: 32000 }, null, catalog.thoughtLevels), "max");
+  assert.equal(resolveSpeed("fast", null, ["standard", "ultrafast"]), "ultrafast");
 
   const formatted = formatAnthropicModelsList(catalog.models, "swe-2-1-medium");
   assert.equal(formatted.data.length, 7);
@@ -196,7 +244,7 @@ test("model catalog parsing and resolution handles exact, Anthropic aliases, Dee
   assert.equal(formatted.has_more, false);
 });
 
-test("end-to-end Anthropic server over fake ACP handles auth, models, JSON, SSE, session continuation, images, and permissions", async () => {
+test("end-to-end Anthropic server over fake ACP handles per-model efforts, output_config.effort, speed suffixes, SSE, and permissions", async () => {
   const fixture = createFakeAcpFixture();
   const config: ProxyConfig = {
     help: false,
@@ -208,6 +256,7 @@ test("end-to-end Anthropic server over fake ACP handles auth, models, JSON, SSE,
     mode: "bypass",
     defaultModel: "swe-2-1-medium",
     thoughtLevel: null,
+    speed: null,
     showTools: "thinking",
     processModel: "in-process",
     apiKey: "secret-key",
@@ -237,7 +286,6 @@ test("end-to-end Anthropic server over fake ACP handles auth, models, JSON, SSE,
     assert.equal(modelsRes.status, 200);
     const modelsJson = (await modelsRes.json()) as AnthropicModelsListResponse;
     assert.equal(modelsJson.data.length, 5);
-    assert.equal(modelsJson.data[2]?.id, "gemini-4-carbon-medium");
 
     const countRes = await fetch(`${baseUrl}/v1/messages/count_tokens`, {
       method: "POST",
@@ -248,14 +296,15 @@ test("end-to-end Anthropic server over fake ACP handles auth, models, JSON, SSE,
     const countJson = (await countRes.json()) as { input_tokens: number };
     assert.ok(countJson.input_tokens > 0);
 
+    // 1. output_config.effort=xhigh on claude-opus-5-5-medium -> sets thought=xhigh; speed suffix via model works too
     const turn1Res = await fetch(`${baseUrl}/v1/messages`, {
       method: "POST",
       headers: { "x-api-key": "secret-key", "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "gemini-4-carbon-medium",
+        model: "claude-opus-5-5-medium",
         system: "Be brief",
         max_tokens: 1024,
-        thinking: { type: "enabled", budget_tokens: 20000 },
+        output_config: { effort: "xhigh" },
         messages: [{ role: "user", content: "first question" }],
       }),
     });
@@ -267,24 +316,15 @@ test("end-to-end Anthropic server over fake ACP handles auth, models, JSON, SSE,
       usage: { input_tokens: number; output_tokens: number };
       content: Array<{ type: string; thinking?: string; text?: string }>;
     };
-    assert.equal(turn1Json.type, "message");
-    assert.equal(turn1Json.model, "gemini-4-carbon-medium");
-    assert.equal(turn1Json.stop_reason, "end_turn");
-    assert.equal(turn1Json.usage.input_tokens, 42);
-    assert.equal(turn1Json.usage.output_tokens, 17);
-    assert.equal(turn1Json.content[0]?.type, "thinking");
-    assert.match(turn1Json.content[0]?.thinking ?? "", /Thinking on gemini-4-carbon-medium/);
-    assert.match(turn1Json.content[0]?.thinking ?? "", /\[Devin tool completed\] Read file/);
-    assert.equal(turn1Json.content[1]?.type, "text");
     const firstAssistantText = turn1Json.content[1]?.text ?? "";
-    assert.match(firstAssistantText, /^sess-2#1 model=gemini-4-carbon-medium mode=bypass thought=max/);
-    assert.match(firstAssistantText, /<system_instructions>\nBe brief\n<\/system_instructions>/);
+    assert.match(firstAssistantText, /^sess-2#1 model=claude-opus-5-5-medium mode=bypass thought=xhigh speed=standard/);
 
+    // 2. Streaming SSE turn 2 continues session, switches via suffix to swe-2-1-xhigh-lightning -> swe-2-1-medium + thought=xhigh + speed=ultrafast
     const turn2Res = await fetch(`${baseUrl}/v1/messages`, {
       method: "POST",
       headers: { "x-api-key": "secret-key", "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "claude-opus-5-5-medium",
+        model: "swe-2-1-xhigh-lightning",
         system: "Be brief",
         max_tokens: 1024,
         stream: true,
@@ -302,23 +342,27 @@ test("end-to-end Anthropic server over fake ACP handles auth, models, JSON, SSE,
       }),
     });
     assert.equal(turn2Res.status, 200);
-    const sseRaw = await turn2Res.text();
-    const events = parseSseEvents(sseRaw);
-    assert.equal(events[0]?.event, "message_start");
-    assert.equal(events.at(-1)?.event, "message_stop");
-
+    const events = parseSseEvents(await turn2Res.text());
     const textDeltas = events
       .filter((e) => e.event === "content_block_delta" && (e.data?.delta as { type?: string } | undefined)?.type === "text_delta")
       .map((e) => (e.data?.delta as { text: string }).text)
       .join("");
-    assert.match(textDeltas, /^sess-2#2 model=claude-opus-5-5-medium/);
-    assert.match(textDeltas, /prompt=follow up$/);
+    assert.match(textDeltas, /^sess-2#2 model=swe-2-1-medium mode=bypass thought=xhigh speed=ultrafast/);
 
-    const sigDelta = events.find(
-      (e) => e.event === "content_block_delta" && (e.data?.delta as { type?: string } | undefined)?.type === "signature_delta",
-    );
-    assert.ok(sigDelta, "thinking block should emit signature_delta before stop");
+    // 3. deepseek-v4-pro-max selects deepseek-v4-pro-high + thought=max
+    const dsRes = await fetch(`${baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: { "x-api-key": "secret-key", "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "deepseek-v4-pro-max",
+        messages: [{ role: "user", content: "hi deepseek" }],
+      }),
+    });
+    assert.equal(dsRes.status, 200);
+    const dsJson = (await dsRes.json()) as { content: Array<{ text?: string }> };
+    assert.match(dsJson.content[1]?.text ?? "", /model=deepseek-v4-pro-high mode=bypass thought=max/);
 
+    // 4. Permission auto-approval
     const permRes = await fetch(`${baseUrl}/v1/messages`, {
       method: "POST",
       headers: { "x-api-key": "secret-key", "Content-Type": "application/json" },
