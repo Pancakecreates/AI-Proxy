@@ -389,6 +389,48 @@ pub async fn run_acp_authenticate(
     }
 }
 
+fn quoted_args(exe: &str, args: &[String]) -> String {
+    std::iter::once(exe.to_string())
+        .chain(args.iter().cloned())
+        .map(|a| format!("\"{}\"", a.replace('"', "\\\"")))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+pub async fn run_cli_login_interactive<F>(
+    exe: &str,
+    args: &[String],
+    envs: &[(&str, &str)],
+    verify: F,
+) -> Result<String, String>
+where
+    F: Fn() -> bool,
+{
+    #[cfg(target_os = "windows")]
+    {
+        let mut cmd = std::process::Command::new("cmd.exe");
+        let line = quoted_args(exe, args);
+        cmd.args(["/C", "start", "\"AI Proxy — вход\"", "cmd.exe", "/K", &line]);
+        for (k, v) in envs {
+            cmd.env(k, v);
+        }
+        cmd.spawn().map_err(|e| e.to_string())?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let mut cmd = spawn_hidden_cmd(exe, args, envs);
+        cmd.spawn().map_err(|e| e.to_string())?;
+    }
+
+    for _ in 0..90 {
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        if verify() {
+            return Ok("Вход выполнен и подтверждён".to_string());
+        }
+    }
+    Err("Вход не подтвердился: файл авторизации не появился за 3 минуты. Завершите вход в открывшемся окне терминала и повторите.".to_string())
+}
+
 pub async fn run_cli_login_command(
     exe: &str,
     args: &[String],
@@ -424,13 +466,34 @@ pub async fn run_cli_login_command(
     }
 }
 
+fn auth_file_has_token(path: &Path) -> bool {
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_str::<Value>(&raw) else {
+        return false;
+    };
+    fn contains_nonempty_string(v: &Value, depth: u8) -> bool {
+        if depth == 0 {
+            return false;
+        }
+        match v {
+            Value::String(s) => !s.trim().is_empty(),
+            Value::Object(m) => m.values().any(|x| contains_nonempty_string(x, depth - 1)),
+            Value::Array(a) => a.iter().any(|x| contains_nonempty_string(x, depth - 1)),
+            _ => false,
+        }
+    }
+    contains_nonempty_string(&value, 4)
+}
+
 pub fn check_simple_auth_status(settings: &AppSettings) -> HashMap<String, bool> {
     let mut map = HashMap::new();
     let home = dirs::home_dir().unwrap_or_default();
     let appdata = crate::discovery::openbot_app_data_dir();
 
-    map.insert("codex".into(), home.join(".codex").join("auth.json").exists());
-    map.insert("grok".into(), home.join(".grok").join("auth.json").exists() || settings.xai_api_key.as_deref().map(|s| !s.trim().is_empty()).unwrap_or(false));
+    map.insert("codex".into(), auth_file_has_token(&home.join(".codex").join("auth.json")));
+    map.insert("grok".into(), auth_file_has_token(&home.join(".grok").join("auth.json")) || settings.xai_api_key.as_deref().map(|s| !s.trim().is_empty()).unwrap_or(false));
     map.insert("devin".into(), appdata.join("devin").join("credentials.toml").exists() || home.join(".local").join("share").join("devin").join("credentials.toml").exists());
     map.insert("copilot".into(), home.join(".copilot").join("config.json").exists());
     map.insert("mistral".into(), home.join(".vibe").join(".env").exists() || home.join(".vibe").join("config.toml").exists());

@@ -67,7 +67,6 @@ export const TitleBar: React.FC<TitleBarProps> = ({
       data-tauri-drag-region
       className="flex h-10 shrink-0 items-center justify-between border-b bg-[var(--bg-elevated)] pl-3 pr-0 select-none"
     >
-      {/* Left: Brand mark + title + live status pill */}
       <div data-tauri-drag-region className="flex items-center gap-2.5 min-w-0">
         <div
           data-tauri-drag-region
@@ -97,7 +96,6 @@ export const TitleBar: React.FC<TitleBarProps> = ({
         </span>
       </div>
 
-      {/* Right: Quick controls + Custom Window Chrome Buttons */}
       <div className="flex h-full items-center gap-1">
         {updateInfo?.hasUpdate && (
           <button

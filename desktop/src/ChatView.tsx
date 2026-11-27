@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import type { BackendModelEntry, ChatMessageRecord, ChatSummary } from "./types";
 import { BrandIcon } from "./BrandIcon";
+import { Select } from "./Select";
 
 interface ChatViewProps {
   models: BackendModelEntry[];
@@ -202,7 +203,6 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
   return (
     <div className="flex h-full overflow-hidden">
-      {/* Left: Local SQLite Chats List */}
       <aside className="w-60 shrink-0 border-r bg-[var(--bg-elevated)] flex flex-col">
         <div className="p-3 border-b flex items-center justify-between">
           <span className="text-xs font-semibold text-[var(--fg-muted)]">Локальные чаты</span>
@@ -257,48 +257,51 @@ export const ChatView: React.FC<ChatViewProps> = ({
         </div>
       </aside>
 
-      {/* Main Chat Pane */}
       <div className="flex-1 flex flex-col min-w-0 bg-[var(--bg)]">
-        {/* Top Controls Bar */}
         <div className="border-b bg-[var(--bg-elevated)] px-4 py-2.5 flex flex-wrap items-center gap-2.5">
           <div className="flex items-center gap-2 flex-1 min-w-[240px]">
             <BrandIcon brand={selectedModelMeta?.brand ?? "devin"} size={18} />
-            <select
+            <Select
               value={modelId}
-              onChange={(e) => setModelId(e.target.value)}
-              className="h-8 flex-1 rounded-md border bg-[var(--bg)] px-2.5 text-xs text-[var(--fg)] focus:outline-none focus:ring-1 focus:ring-[var(--accent)]"
-            >
-              {models.length === 0 && <option value={modelId}>{modelId}</option>}
-              {models.map((m) => (
-                <option key={m.qualifiedId} value={m.qualifiedId}>
-                  {m.displayName} — {m.description}
-                </option>
-              ))}
-            </select>
+              onChange={setModelId}
+              searchable
+              searchPlaceholder="Поиск модели..."
+              ariaLabel="Модель"
+              placeholder="Выберите модель…"
+              className="flex-1 min-w-0"
+              options={
+                models.length === 0
+                  ? [{ value: modelId, label: modelId }]
+                  : models.map((m) => ({
+                      value: m.qualifiedId,
+                      label: m.displayName,
+                      hint: m.description,
+                    }))
+              }
+            />
           </div>
 
-          <select
+          <Select
             value={effort}
-            onChange={(e) => setEffort(e.target.value)}
-            aria-label="Уровень мышления"
-            className="h-8 rounded-md border bg-[var(--bg)] px-2 text-xs text-[var(--fg)]"
-          >
-            {["none", "minimal", "low", "medium", "high", "xhigh", "max"].map((lvl) => (
-              <option key={lvl} value={lvl}>
-                Effort: {lvl}
-              </option>
-            ))}
-          </select>
+            onChange={setEffort}
+            ariaLabel="Уровень мышления"
+            className="w-36"
+            options={["none", "minimal", "low", "medium", "high", "xhigh", "max"].map((lvl) => ({
+              value: lvl,
+              label: `Effort: ${lvl}`,
+            }))}
+          />
 
-          <select
+          <Select
             value={protocol}
-            onChange={(e) => setProtocol(e.target.value)}
-            aria-label="Протокол"
-            className="h-8 rounded-md border bg-[var(--bg)] px-2 text-xs text-[var(--fg)]"
-          >
-            <option value="anthropic">Anthropic</option>
-            <option value="openai">OpenAI</option>
-          </select>
+            onChange={setProtocol}
+            ariaLabel="Протокол"
+            className="w-28"
+            options={[
+              { value: "anthropic", label: "Anthropic" },
+              { value: "openai", label: "OpenAI" },
+            ]}
+          />
 
           <button
             type="button"
@@ -324,7 +327,6 @@ export const ChatView: React.FC<ChatViewProps> = ({
           </div>
         )}
 
-        {/* Messages */}
         <div ref={scrollRef} className="flex-1 overflow-y-auto p-5 space-y-4">
           {messages.length === 0 && !sending && (
             <div className="h-full flex flex-col items-center justify-center text-center max-w-md mx-auto gap-2 text-[var(--fg-muted)]">
@@ -401,7 +403,6 @@ export const ChatView: React.FC<ChatViewProps> = ({
           )}
         </div>
 
-        {/* Composer */}
         <div className="border-t bg-[var(--bg-elevated)] p-3">
           <div className="flex items-end gap-2">
             <textarea

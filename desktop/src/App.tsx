@@ -85,7 +85,6 @@ export function App() {
     };
   }, []);
 
-  // Silent update check at startup if enabled
   useEffect(() => {
     if (!settings || settings.checkUpdatesOnStart === false) return;
     const timer = setTimeout(() => {
@@ -96,7 +95,6 @@ export function App() {
     return () => clearTimeout(timer);
   }, [settings?.checkUpdatesOnStart]);
 
-  // Apply theme & accent onto <html>
   useEffect(() => {
     if (!settings) return;
     const html = document.documentElement;
@@ -176,7 +174,6 @@ export function App() {
       />
 
       <div className="flex-1 flex min-h-0 overflow-hidden">
-        {/* Sidebar */}
         <nav className="w-52 shrink-0 border-r bg-[var(--bg-elevated)] p-2.5 flex flex-col justify-between">
           <div className="space-y-0.5">
             {NAV_ITEMS.map((item) => {
@@ -217,7 +214,6 @@ export function App() {
           </div>
         </nav>
 
-        {/* Active View */}
         <main className="flex-1 min-w-0 min-h-0 overflow-hidden bg-[var(--bg)]">
           {tab === "overview" && (
             <div className="h-full overflow-y-auto">

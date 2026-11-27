@@ -756,6 +756,13 @@ test("Multi-backend router routes across Antigravity accounts, OpenCode Go/Free,
     const modelsJson = (await modelsRes.json()) as AnthropicModelsListResponse;
     // 1 agy1 + 1 agy2 + 2 opencode (go + free; paid filtered out!) + 1 grok + 1 codex = 6
     assert.equal(modelsJson.data.length, 6);
+    for (const missing of [
+      "claude-fable-acp-agy-a3f9ab07.g--emini-4-hydrogen[1m]",
+      "agy-missing.gemini-4-hydrogen",
+      "unknown-model",
+    ]) {
+      assert.throws(() => router.resolveTarget(missing), /unavailable/i);
+    }
     for (const m of modelsJson.data) {
       assert.equal(isClaudeDesktopCompatibleId(m.id), true);
       assert.equal(m.id.includes("-h-"), false, `Expected readable gateway ID, got ${m.id}`);

@@ -37,6 +37,7 @@ impl AppDb {
                 path TEXT NOT NULL,
                 model TEXT NOT NULL,
                 resolved_model TEXT,
+                effort TEXT,
                 backend_key TEXT,
                 status INTEGER NOT NULL,
                 latency_ms INTEGER NOT NULL,
@@ -96,6 +97,8 @@ impl AppDb {
         )
         .map_err(|e| e.to_string())?;
 
+        let _ = conn.execute("ALTER TABLE request_logs ADD COLUMN effort TEXT", []);
+
         Ok(Self { conn: Mutex::new(conn) })
     }
 
@@ -129,10 +132,10 @@ impl AppDb {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         conn.execute(
             "INSERT INTO request_logs (
-                created_at, request_id, protocol, method, path, model, resolved_model,
+                created_at, request_id, protocol, method, path, model, resolved_model, effort,
                 backend_key, status, latency_ms, input_tokens, output_tokens, thinking_tokens,
                 usage_source, cost_usd, api_equivalent_usd, error, prompt_preview, response_preview
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
             params![
                 entry.created_at,
                 entry.request_id,
@@ -141,6 +144,7 @@ impl AppDb {
                 entry.path,
                 entry.model,
                 entry.resolved_model,
+                entry.effort,
                 entry.backend_key,
                 entry.status as i64,
                 entry.latency_ms as i64,
@@ -169,16 +173,16 @@ impl AppDb {
         let q = search.map(|s| format!("%{}%", s.trim().to_lowercase())).filter(|s| s != "%%");
 
         let sql = if q.is_some() {
-            "SELECT id, created_at, request_id, protocol, method, path, model, resolved_model,
+            "SELECT id, created_at, request_id, protocol, method, path, model, resolved_model, effort,
                     backend_key, status, latency_ms, input_tokens, output_tokens, thinking_tokens,
                     usage_source, cost_usd, api_equivalent_usd, error, prompt_preview, response_preview
              FROM request_logs
              WHERE lower(model) LIKE ?1 OR lower(coalesce(resolved_model,'')) LIKE ?1
                 OR lower(coalesce(backend_key,'')) LIKE ?1 OR lower(coalesce(error,'')) LIKE ?1
-                OR lower(coalesce(prompt_preview,'')) LIKE ?1
+                OR lower(coalesce(prompt_preview,'')) LIKE ?1 OR lower(coalesce(effort,'')) LIKE ?1
              ORDER BY id DESC LIMIT ?2"
         } else {
-            "SELECT id, created_at, request_id, protocol, method, path, model, resolved_model,
+            "SELECT id, created_at, request_id, protocol, method, path, model, resolved_model, effort,
                     backend_key, status, latency_ms, input_tokens, output_tokens, thinking_tokens,
                     usage_source, cost_usd, api_equivalent_usd, error, prompt_preview, response_preview
              FROM request_logs
@@ -196,18 +200,19 @@ impl AppDb {
                 path: row.get(5)?,
                 model: row.get(6)?,
                 resolved_model: row.get(7)?,
-                backend_key: row.get(8)?,
-                status: row.get::<_, i64>(9)? as u16,
-                latency_ms: row.get::<_, i64>(10)? as u64,
-                input_tokens: row.get::<_, i64>(11)? as u64,
-                output_tokens: row.get::<_, i64>(12)? as u64,
-                thinking_tokens: row.get::<_, i64>(13)? as u64,
-                usage_source: row.get(14)?,
-                cost_usd: row.get(15)?,
-                api_equivalent_usd: row.get(16)?,
-                error: row.get(17)?,
-                prompt_preview: row.get(18)?,
-                response_preview: row.get(19)?,
+                effort: row.get(8)?,
+                backend_key: row.get(9)?,
+                status: row.get::<_, i64>(10)? as u16,
+                latency_ms: row.get::<_, i64>(11)? as u64,
+                input_tokens: row.get::<_, i64>(12)? as u64,
+                output_tokens: row.get::<_, i64>(13)? as u64,
+                thinking_tokens: row.get::<_, i64>(14)? as u64,
+                usage_source: row.get(15)?,
+                cost_usd: row.get(16)?,
+                api_equivalent_usd: row.get(17)?,
+                error: row.get(18)?,
+                prompt_preview: row.get(19)?,
+                response_preview: row.get(20)?,
             })
         };
 

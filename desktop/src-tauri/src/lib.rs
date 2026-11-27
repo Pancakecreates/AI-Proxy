@@ -42,6 +42,10 @@ pub fn run() {
 
             let mut settings = db.load_settings().ok().flatten().unwrap_or_default();
             settings.antigravity_accounts = merge_antigravity_accounts(&settings.antigravity_accounts);
+            if settings.api_key.as_deref().map(|k| k.trim().is_empty()).unwrap_or(true) {
+                let raw = format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple());
+                settings.api_key = Some(format!("aipx_{}", &raw[..40]));
+            }
             let _ = db.save_settings(&settings);
 
             *app_handle_slot.write().unwrap() = Some(app.handle().clone());

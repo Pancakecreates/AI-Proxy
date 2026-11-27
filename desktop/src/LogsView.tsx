@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { RefreshCw, Search, Trash2 } from "lucide-react";
 import type { AppLogEntry, RequestLogEntry } from "./types";
+import { Select } from "./Select";
 
 export const LogsView: React.FC = () => {
   const [subTab, setSubTab] = useState<"requests" | "system">("requests");
@@ -83,17 +84,19 @@ export const LogsView: React.FC = () => {
               />
             </div>
           ) : (
-            <select
+            <Select
               value={levelFilter}
-              onChange={(e) => setLevelFilter(e.target.value)}
-              className="h-8 rounded-md border bg-[var(--bg)] px-2.5 text-xs"
-            >
-              <option value="all">Все уровни</option>
-              <option value="info">Info</option>
-              <option value="warn">Warn</option>
-              <option value="error">Error</option>
-              <option value="debug">Debug</option>
-            </select>
+              onChange={setLevelFilter}
+              ariaLabel="Уровень логов"
+              className="w-36"
+              options={[
+                { value: "all", label: "Все уровни" },
+                { value: "info", label: "Info" },
+                { value: "warn", label: "Warn" },
+                { value: "error", label: "Error" },
+                { value: "debug", label: "Debug" },
+              ]}
+            />
           )}
           <button
             type="button"
@@ -119,18 +122,20 @@ export const LogsView: React.FC = () => {
             <table className="w-full text-xs text-left border-collapse">
               <thead className="border-b bg-[var(--bg-subtle)] text-[var(--fg-muted)]">
                 <tr>
-                  <th className="py-2 px-3">Время</th>
-                  <th className="py-2 px-3">Протокол</th>
-                  <th className="py-2 px-3">Модель</th>
-                  <th className="py-2 px-3">Статус</th>
-                  <th className="py-2 px-3 text-right">Токены</th>
-                  <th className="py-2 px-3 text-right">Задержка</th>
+                  <th className="py-2 px-3 font-medium">Время</th>
+                  <th className="py-2 px-3 font-medium">Протокол</th>
+                  <th className="py-2 px-3 font-medium">Модель</th>
+                  <th className="py-2 px-3 font-medium">Усилие</th>
+                  <th className="py-2 px-3 font-medium">Статус</th>
+                  <th className="py-2 px-3 font-medium text-right">Токены</th>
+                  <th className="py-2 px-3 font-medium text-right">Задержка</th>
+                  <th className="py-2 px-3 font-medium text-right">Стоимость</th>
                 </tr>
               </thead>
               <tbody className="divide-y">
                 {reqLogs.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="py-10 text-center text-[var(--fg-muted)]">
+                    <td colSpan={8} className="py-10 text-center text-[var(--fg-muted)]">
                       Логи запросов пусты.
                     </td>
                   </tr>
@@ -149,8 +154,16 @@ export const LogsView: React.FC = () => {
                             {r.protocol}
                           </span>
                         </td>
-                        <td className="py-2 px-3 font-mono text-[11px] truncate max-w-[260px]">
-                          {r.resolvedModel || r.model}
+                        <td className="py-2 px-3 font-mono text-[11px] max-w-[260px]">
+                          <div className="truncate">{r.resolvedModel || r.model}</div>
+                          {r.resolvedModel && r.resolvedModel !== r.model && (
+                            <div className="truncate text-[10px] text-[var(--fg-subtle)]">
+                              {r.model}
+                            </div>
+                          )}
+                        </td>
+                        <td className="py-2 px-3 text-[11px] text-[var(--fg-muted)] whitespace-nowrap">
+                          {r.effort || "—"}
                         </td>
                         <td className="py-2 px-3 tabular-nums">
                           <span
@@ -169,15 +182,37 @@ export const LogsView: React.FC = () => {
                         <td className="py-2 px-3 text-right tabular-nums text-[var(--fg-muted)]">
                           {r.latencyMs} мс
                         </td>
+                        <td className="py-2 px-3 text-right tabular-nums whitespace-nowrap">
+                          {r.costUsd > 0 ? (
+                            <span>${r.costUsd.toFixed(4)}</span>
+                          ) : r.apiEquivalentUsd > 0 ? (
+                            <span
+                              className="text-[var(--fg-subtle)]"
+                              title="Расчётный эквивалент стоимости API — реальное списание неизвестно"
+                            >
+                              ~${r.apiEquivalentUsd.toFixed(4)}
+                            </span>
+                          ) : (
+                            <span className="text-[var(--fg-subtle)]">—</span>
+                          )}
+                        </td>
                       </tr>
                       {expandedId === r.id && (
                         <tr className="bg-[var(--bg)]">
-                          <td colSpan={6} className="p-3 space-y-2 text-[11px]">
-                            <div className="flex flex-wrap gap-4 text-[var(--fg-muted)] tabular-nums">
-                              <span>Request ID: <code className="font-mono">{r.requestId}</code></span>
-                              <span>Backend: {r.backendKey || "—"}</span>
-                              <span>Источник токенов: {r.usageSource}</span>
-                              <span>API экв.: ${r.apiEquivalentUsd.toFixed(5)}</span>
+                          <td colSpan={8} className="p-3 space-y-2 text-[11px]">
+                            <div className="flex flex-wrap gap-x-4 gap-y-1 text-[var(--fg-muted)] tabular-nums">
+                              <span>ID запроса: <code className="font-mono">{r.requestId}</code></span>
+                              <span>Запрошено: <code className="font-mono">{r.model}</code></span>
+                              <span>Исполнено: <code className="font-mono">{r.resolvedModel || "—"}</code></span>
+                              <span>Усилие: {r.effort || "—"}</span>
+                              <span>Шлюз: {r.backendKey || "—"}</span>
+                              <span>Токены: {r.usageSource === "measured" ? "измерены" : "оценка"}</span>
+                              <span>
+                                Списано: {r.costUsd > 0 ? `$${r.costUsd.toFixed(5)}` : "неизвестно"}
+                              </span>
+                              <span title="Расчётный эквивалент стоимости публичного API">
+                                Экв. API: ~${r.apiEquivalentUsd.toFixed(5)}
+                              </span>
                             </div>
                             {r.error && (
                               <div className="rounded border border-[var(--danger)]/40 bg-[var(--danger)]/10 p-2 text-[var(--danger)] font-mono">
@@ -222,7 +257,7 @@ export const LogsView: React.FC = () => {
                     {new Date(l.createdAt).toLocaleTimeString()}
                   </span>
                   <span
-                    className={`uppercase font-semibold w-11 shrink-0 ${
+                    className={`font-semibold w-11 shrink-0 ${
                       l.level === "error"
                         ? "text-[var(--danger)]"
                         : l.level === "warn"

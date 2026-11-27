@@ -56,7 +56,6 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
   const [installProgress, setInstallProgress] = useState<Record<string, RuntimeInstallProgress>>({});
   const [feedback, setFeedback] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
 
-  // Custom ACP form
   const [newAcpName, setNewAcpName] = useState("");
   const [newAcpCmd, setNewAcpCmd] = useState("");
   const [newAcpArgs, setNewAcpArgs] = useState("acp");
@@ -259,7 +258,6 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
           </div>
         )}
 
-        {/* Antigravity Accounts & Quotas */}
         <section className="rounded-lg border bg-[var(--bg-elevated)] overflow-hidden">
           <div className="border-b px-4 py-3 flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -342,7 +340,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                             </div>
                             <div className="h-1.5 w-full rounded-full bg-[var(--bg-subtle)] overflow-hidden">
                               <div
-                                className="h-full rounded-full bg-[var(--accent)] transition-all"
+                                className="h-full rounded-full bg-[var(--accent)] transition-[width]"
                                 style={{ width: `${Math.max(2, Math.min(100, w.remainingPercent))}%` }}
                               />
                             </div>
@@ -362,7 +360,6 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
           </div>
         </section>
 
-        {/* Codex Rate Limits Card */}
         {quotas.filter((q) => q.provider === "codex").map((cq) => (
           <section key={cq.accountKey} className="rounded-lg border bg-[var(--bg-elevated)] p-4 space-y-3">
             <div className="flex items-center justify-between">
@@ -424,7 +421,6 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
           </section>
         ))}
 
-        {/* All Built-in OpenBot Providers (Enable, Download CLI, Sign In/Out) */}
         <section className="rounded-lg border bg-[var(--bg-elevated)] overflow-hidden">
           <div className="border-b px-4 py-3">
             <h2 className="text-sm font-semibold">Провайдеры OpenBot и установка CLI</h2>
@@ -504,7 +500,6 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
           </div>
         </section>
 
-        {/* Custom ACP Agents */}
         <section className="rounded-lg border bg-[var(--bg-elevated)] p-4 space-y-4">
           <div className="flex items-center gap-2">
             <Terminal className="size-4 text-[var(--fg-muted)]" />

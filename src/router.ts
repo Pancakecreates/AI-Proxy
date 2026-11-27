@@ -1,7 +1,6 @@
 import {
   decodeGatewayModelId,
   peelEffortAndSpeedSuffixes,
-  resolveDevinModelWithHints,
 } from "./models.js";
 import type {
   AnthropicMessagesRequest,
@@ -222,34 +221,7 @@ export class BackendRouter {
       }
     }
 
-    const devinBackend = this.#backends.find((b) => b.kind === "devin");
-    if (devinBackend) {
-      const devinModels = devinBackend.listModels();
-      const selection = resolveDevinModelWithHints(requestedModel, devinModels, {
-        defaultModel: this.#config.defaultModel,
-        modelMap: this.#config.modelMap,
-      });
-      return {
-        backend: devinBackend,
-        nativeModelId: selection.model.id,
-        requestedEffort: selection.requestedEffort,
-        requestedSpeed: selection.requestedSpeed,
-      };
-    }
-
-    const fallbackBackend = this.#backends[0];
-    if (!fallbackBackend) throw new Error("No AI backends are enabled.");
-    const fallbackModels = fallbackBackend.listModels();
-    const selection = resolveDevinModelWithHints(requestedModel, fallbackModels, {
-      defaultModel: fallbackModels[0]?.nativeId ?? this.#config.defaultModel,
-      modelMap: this.#config.modelMap,
-    });
-    return {
-      backend: fallbackBackend,
-      nativeModelId: selection.model.id,
-      requestedEffort: selection.requestedEffort,
-      requestedSpeed: selection.requestedSpeed,
-    };
+    throw new Error(`Model "${raw}" is unavailable in the active backend catalog. Request was not redirected to another model.`);
   }
 
   async runTurn(request: AnthropicMessagesRequest, callbacks: RunTurnCallbacks): Promise<TurnResult> {

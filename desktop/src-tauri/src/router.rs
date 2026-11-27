@@ -556,7 +556,10 @@ impl BackendRouter {
             if probe.is_empty() {
                 continue;
             }
-            if let Some(m) = all_models.iter().find(|m| m.native_id.eq_ignore_ascii_case(probe)) {
+            if let Some(m) = all_models.iter().find(|m| {
+                m.qualified_id.eq_ignore_ascii_case(probe)
+                    || m.native_id.eq_ignore_ascii_case(probe)
+            }) {
                 if let Some(b) = backends.iter().find(|b| b.key() == m.backend_key) {
                     let exact = probe == &eff_slug;
                     return Ok((
@@ -570,33 +573,9 @@ impl BackendRouter {
             }
         }
 
-        // Fallback fuzzy match (e.g. claude-opus-4-6 -> Devin)
-        let lower = base_slug.to_lowercase();
-        for kw in ["haiku", "sonnet", "opus", "fable"] {
-            if lower.contains(kw) {
-                if let Some(m) = all_models
-                    .iter()
-                    .find(|m| m.backend_kind == BackendKind::Devin && m.native_id.to_lowercase().contains(kw))
-                {
-                    if let Some(b) = backends.iter().find(|b| b.key() == m.backend_key) {
-                        return Ok((b.clone(), m.native_id.clone(), eff, spd, m.qualified_id.clone()));
-                    }
-                }
-            }
-        }
-
-        let fallback_b = backends
-            .iter()
-            .find(|b| b.kind() == BackendKind::Devin)
-            .or_else(|| backends.first())
-            .cloned()
-            .ok_or("Нет доступных моделей и бэкендов")?;
-        let fallback_model = all_models
-            .iter()
-            .find(|m| m.backend_key == fallback_b.key())
-            .map(|m| m.native_id.clone())
-            .unwrap_or_else(|| s.default_model.clone());
-        Ok((fallback_b, fallback_model.clone(), eff, spd, fallback_model))
+        Err(format!(
+            "Модель «{raw}» недоступна: точное совпадение не найдено в каталоге активных бэкендов. Обновите каталог или включите выбранный бэкенд. Запрос не перенаправлен на другую модель."
+        ))
     }
 
     pub async fn run_turn(
@@ -604,7 +583,7 @@ impl BackendRouter {
         mut req: UnifiedTurnRequest,
         sink: Option<StreamSink>,
         cancel: Option<Arc<Notify>>,
-    ) -> Result<(TurnResult, String, BackendKind, String), String> {
+    ) -> Result<(TurnResult, String, BackendKind, String, Option<String>), String> {
         let (backend, native_id, hint_effort, hint_speed, resolved_qid) =
             self.resolve_target(req.model.as_deref()).await?;
         if req.requested_effort.is_none() {
@@ -613,16 +592,66 @@ impl BackendRouter {
         if req.requested_speed.is_none() {
             req.requested_speed = hint_speed;
         }
+        let effective_effort = req
+            .requested_effort
+            .or(self.settings.read().await.thought_level)
+            .map(|e| e.as_str().to_string());
         let kind = backend.kind();
         let bkey = backend.key().to_string();
         let res = backend.run_turn(&native_id, &req, sink, cancel).await?;
-        Ok((res, bkey, kind, resolved_qid))
+        Ok((res, bkey, kind, resolved_qid, effective_effort))
     }
 
     pub async fn shutdown(&self) {
         let snapshot = self.backends.read().await.clone();
         for b in snapshot {
             b.shutdown().await;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn unavailable_router() -> Arc<BackendRouter> {
+        let settings = Arc::new(RwLock::new(AppSettings::default()));
+        let log: LogFn = Arc::new(|_, _, _| {});
+        let router = BackendRouter::new(settings.clone(), log.clone());
+        let backend = AcpBackend::new(
+            AcpEndpointConfig {
+                key: "devin".into(),
+                kind: BackendKind::Devin,
+                label: "Devin".into(),
+                executable: "ai-proxy-nonexistent-test-backend".into(),
+                args: vec![],
+                env_overrides: HashMap::new(),
+                auth_method_ids: vec![],
+                supports_close_session: false,
+                close_force_meta: false,
+                qualified_prefix: String::new(),
+                description_prefix: String::new(),
+                opencode_filter: None,
+                discovery_cwd: None,
+            },
+            settings,
+            log,
+        );
+        router.backends.write().await.push(BackendInstance::Acp(backend));
+        router
+    }
+
+    #[tokio::test]
+    async fn unavailable_explicit_model_never_uses_another_backend_default() {
+        let router = unavailable_router().await;
+        for requested in [
+            "claude-fable-acp-agy-a3f9ab07.g--emini-4-hydrogen[1m]",
+            "missing-model",
+            "agy-a3f9ab07.gemini-4-hydrogen-high",
+        ] {
+            let result = router.resolve_target(Some(requested)).await;
+            assert!(result.is_err(), "unavailable model {requested} was silently replaced");
+            assert!(result.err().unwrap().contains(requested));
         }
     }
 }

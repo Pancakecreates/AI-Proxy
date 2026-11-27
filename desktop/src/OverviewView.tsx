@@ -49,7 +49,6 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
 
   return (
     <div className="flex flex-col gap-5 p-6 max-w-6xl mx-auto">
-      {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold tracking-tight text-balance">Панель шлюзов</h1>
@@ -74,7 +73,6 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
         </div>
       )}
 
-      {/* KPI Strip */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <div className="rounded-lg border bg-[var(--bg-elevated)] p-3.5">
           <div className="flex items-center justify-between text-xs text-[var(--fg-muted)]">
@@ -125,9 +123,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
         </div>
       </div>
 
-      {/* Dual Endpoint Cards */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* Anthropic Card */}
         <div className="rounded-lg border bg-[var(--bg-elevated)] p-4 flex flex-col gap-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
@@ -183,7 +179,6 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
           </div>
         </div>
 
-        {/* OpenAI / Codex Card */}
         <div className="rounded-lg border bg-[var(--bg-elevated)] p-4 flex flex-col gap-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
@@ -242,7 +237,6 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
         </div>
       </div>
 
-      {/* Backends Health Grid */}
       <div className="rounded-lg border bg-[var(--bg-elevated)]">
         <div className="flex items-center justify-between border-b px-4 py-3">
           <h2 className="text-sm font-semibold">Активные бэкенды</h2>

@@ -55,21 +55,22 @@ export const UsageView: React.FC<UsageViewProps> = ({ usage, onReload }) => {
           </div>
         </div>
 
-        {/* Summary Cards */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <div className="rounded-lg border bg-[var(--bg-elevated)] p-4">
-            <div className="text-xs text-[var(--fg-muted)]">Реальные траты (Pay-per-token)</div>
+            <div className="text-xs text-[var(--fg-muted)]">Списано за токены</div>
             <div className="mt-1 text-2xl font-semibold tabular-nums">
               ${(usage?.totalCostUsd ?? 0).toFixed(4)}
             </div>
-            <div className="mt-1 text-[11px] text-[var(--fg-subtle)]">Подписки/Free CLI = $0.00</div>
+            <div className="mt-1 text-[11px] text-[var(--fg-subtle)]">
+              Только провайдеры с оплатой за токен; подписки и бесплатные CLI — без списаний
+            </div>
           </div>
           <div className="rounded-lg border bg-[var(--bg-elevated)] p-4">
-            <div className="text-xs text-[var(--fg-muted)]">Эквивалент API</div>
+            <div className="text-xs text-[var(--fg-muted)]">Оценка в ценах API</div>
             <div className="mt-1 text-2xl font-semibold tabular-nums text-[var(--accent)]">
-              ${(usage?.totalApiEquivalentUsd ?? 0).toFixed(4)}
+              ~${(usage?.totalApiEquivalentUsd ?? 0).toFixed(4)}
             </div>
-            <div className="mt-1 text-[11px] text-[var(--fg-subtle)]">Расчёт по тарифам API</div>
+            <div className="mt-1 text-[11px] text-[var(--fg-subtle)]">Расчётный эквивалент по публичным тарифам</div>
           </div>
           <div className="rounded-lg border bg-[var(--bg-elevated)] p-4">
             <div className="text-xs text-[var(--fg-muted)]">Входные / Выходные токены</div>
@@ -91,7 +92,6 @@ export const UsageView: React.FC<UsageViewProps> = ({ usage, onReload }) => {
           </div>
         </div>
 
-        {/* Daily Bar Chart */}
         <div className="rounded-lg border bg-[var(--bg-elevated)] p-4">
           <h2 className="text-sm font-semibold mb-3">Динамика токенов по дням</h2>
           {(usage?.byDay.length ?? 0) === 0 ? (
@@ -122,17 +122,16 @@ export const UsageView: React.FC<UsageViewProps> = ({ usage, onReload }) => {
           )}
         </div>
 
-        {/* Breakdown Tables */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <div className="rounded-lg border bg-[var(--bg-elevated)] overflow-hidden">
             <div className="border-b px-4 py-3 text-sm font-semibold">По бэкендам</div>
             <table className="w-full text-xs text-left">
               <thead className="border-b bg-[var(--bg-subtle)] text-[var(--fg-muted)]">
                 <tr>
-                  <th className="py-2 px-3">Бэкенд</th>
-                  <th className="py-2 px-3 text-right">Запросов</th>
-                  <th className="py-2 px-3 text-right">Токенов</th>
-                  <th className="py-2 px-3 text-right">API экв.</th>
+                  <th className="py-2 px-3 font-medium">Бэкенд</th>
+                  <th className="py-2 px-3 font-medium text-right">Запросов</th>
+                  <th className="py-2 px-3 font-medium text-right">Токенов</th>
+                  <th className="py-2 px-3 font-medium text-right">Оценка API</th>
                 </tr>
               </thead>
               <tbody className="divide-y tabular-nums">
@@ -141,7 +140,7 @@ export const UsageView: React.FC<UsageViewProps> = ({ usage, onReload }) => {
                     <td className="py-2 px-3 font-medium">{b.label}</td>
                     <td className="py-2 px-3 text-right">{b.requests}</td>
                     <td className="py-2 px-3 text-right">{(b.inputTokens + b.outputTokens).toLocaleString()}</td>
-                    <td className="py-2 px-3 text-right">${b.apiEquivalentUsd.toFixed(4)}</td>
+                    <td className="py-2 px-3 text-right">~${b.apiEquivalentUsd.toFixed(4)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -153,10 +152,10 @@ export const UsageView: React.FC<UsageViewProps> = ({ usage, onReload }) => {
             <table className="w-full text-xs text-left">
               <thead className="border-b bg-[var(--bg-subtle)] text-[var(--fg-muted)]">
                 <tr>
-                  <th className="py-2 px-3">Модель</th>
-                  <th className="py-2 px-3 text-right">Запросов</th>
-                  <th className="py-2 px-3 text-right">Токенов</th>
-                  <th className="py-2 px-3 text-right">API экв.</th>
+                  <th className="py-2 px-3 font-medium">Модель</th>
+                  <th className="py-2 px-3 font-medium text-right">Запросов</th>
+                  <th className="py-2 px-3 font-medium text-right">Токенов</th>
+                  <th className="py-2 px-3 font-medium text-right">Оценка API</th>
                 </tr>
               </thead>
               <tbody className="divide-y tabular-nums">
@@ -165,7 +164,7 @@ export const UsageView: React.FC<UsageViewProps> = ({ usage, onReload }) => {
                     <td className="py-2 px-3 font-mono text-[11px] truncate max-w-[200px]">{m.label}</td>
                     <td className="py-2 px-3 text-right">{m.requests}</td>
                     <td className="py-2 px-3 text-right">{(m.inputTokens + m.outputTokens).toLocaleString()}</td>
-                    <td className="py-2 px-3 text-right">${m.apiEquivalentUsd.toFixed(4)}</td>
+                    <td className="py-2 px-3 text-right">~${m.apiEquivalentUsd.toFixed(4)}</td>
                   </tr>
                 ))}
               </tbody>

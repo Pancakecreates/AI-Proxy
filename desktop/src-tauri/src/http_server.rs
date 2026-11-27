@@ -379,7 +379,7 @@ async fn anthropic_messages_handler(
 
     if !is_stream {
         match state.router.run_turn(unified, None, None).await {
-            Ok((res, bkey, bkind, resolved_qid)) => {
+            Ok((res, bkey, bkind, _resolved_qid, eff)) => {
                 let mut content = Vec::new();
                 if !thinking_disabled && !res.thinking_text.is_empty() {
                     content.push(json!({ "type": "thinking", "thinking": res.thinking_text, "signature": "devin-acp" }));
@@ -412,7 +412,7 @@ async fn anthropic_messages_handler(
                         method: "POST".into(),
                         path: path_str,
                         model: model_label.clone(),
-                        resolved_model: Some(resolved_qid),
+                        resolved_model: Some(res.model_id.clone()), effort: eff.clone(),
                         backend_key: Some(bkey),
                         status: 200,
                         latency_ms: start.elapsed().as_millis() as u64,
@@ -451,7 +451,7 @@ async fn anthropic_messages_handler(
                         method: "POST".into(),
                         path: path_str,
                         model: model_label,
-                        resolved_model: None,
+                        resolved_model: None, effort: None,
                         backend_key: None,
                         status: 502,
                         latency_ms: start.elapsed().as_millis() as u64,
@@ -638,7 +638,7 @@ async fn anthropic_messages_handler(
             }
 
             match turn_result.unwrap() {
-                Ok((res, bkey, bkind, resolved_qid)) => {
+                Ok((res, bkey, bkind, _resolved_qid, eff)) => {
                     if !emitted_text && next_idx == 0 {
                         ensure_block("text", &sse_tx, &mut next_idx, &mut active_type, &mut active_idx);
                         let _ = sse_tx.send(Ok(Event::default().event("content_block_delta").data(
@@ -688,7 +688,7 @@ async fn anthropic_messages_handler(
                             method: "POST".into(),
                             path: path_bg,
                             model: model_label_bg,
-                            resolved_model: Some(resolved_qid),
+                            resolved_model: Some(res.model_id.clone()), effort: eff.clone(),
                             backend_key: Some(bkey),
                             status: 200,
                             latency_ms: start.elapsed().as_millis() as u64,
@@ -719,7 +719,7 @@ async fn anthropic_messages_handler(
                             method: "POST".into(),
                             path: path_bg,
                             model: model_label_bg,
-                            resolved_model: None,
+                            resolved_model: None, effort: None,
                             backend_key: None,
                             status: 502,
                             latency_ms: start.elapsed().as_millis() as u64,
@@ -814,7 +814,7 @@ async fn openai_chat_handler(
 
     if !is_stream {
         match state.router.run_turn(unified, None, None).await {
-            Ok((res, bkey, bkind, resolved_qid)) => {
+            Ok((res, bkey, bkind, resolved_qid, eff)) => {
                 let in_tok = if res.usage.input_tokens > 0 { res.usage.input_tokens } else { estimate_tokens_from_chars(est_in_chars) };
                 let out_tok = if res.usage.output_tokens > 0 { res.usage.output_tokens } else { estimate_tokens_from_chars(res.assistant_text.len() + res.thinking_text.len()) };
                 let (cost_usd, eq_usd) = calculate_costs(&s, bkind, &res.model_id, in_tok, out_tok);
@@ -829,7 +829,7 @@ async fn openai_chat_handler(
                         method: "POST".into(),
                         path: path_str,
                         model: model_label,
-                        resolved_model: Some(resolved_qid.clone()),
+                        resolved_model: Some(res.model_id.clone()), effort: eff.clone(),
                         backend_key: Some(bkey),
                         status: 200,
                         latency_ms: start.elapsed().as_millis() as u64,
@@ -882,7 +882,7 @@ async fn openai_chat_handler(
                         method: "POST".into(),
                         path: path_str,
                         model: model_label,
-                        resolved_model: None,
+                        resolved_model: None, effort: None,
                         backend_key: None,
                         status: 502,
                         latency_ms: start.elapsed().as_millis() as u64,
@@ -988,7 +988,7 @@ async fn openai_chat_handler(
             }
 
             match turn_result.unwrap() {
-                Ok((res, bkey, bkind, resolved_qid)) => {
+                Ok((res, bkey, bkind, resolved_qid, eff)) => {
                     let in_tok = if res.usage.input_tokens > 0 { res.usage.input_tokens } else if latest_in > 0 { latest_in } else { estimate_tokens_from_chars(est_in_chars) };
                     let out_tok = if res.usage.output_tokens > 0 { res.usage.output_tokens } else if latest_out > 0 { latest_out } else { estimate_tokens_from_chars(res.assistant_text.len() + res.thinking_text.len()) };
                     let (cost_usd, eq_usd) = calculate_costs(&settings_bg, bkind, &res.model_id, in_tok, out_tok);
@@ -1015,7 +1015,7 @@ async fn openai_chat_handler(
                             method: "POST".into(),
                             path: path_bg,
                             model: model_label_bg,
-                            resolved_model: Some(resolved_qid),
+                            resolved_model: Some(res.model_id.clone()), effort: eff.clone(),
                             backend_key: Some(bkey),
                             status: 200,
                             latency_ms: start.elapsed().as_millis() as u64,
@@ -1046,7 +1046,7 @@ async fn openai_chat_handler(
                             method: "POST".into(),
                             path: path_bg,
                             model: model_label_bg,
-                            resolved_model: None,
+                            resolved_model: None, effort: None,
                             backend_key: None,
                             status: 502,
                             latency_ms: start.elapsed().as_millis() as u64,
@@ -1164,7 +1164,7 @@ async fn openai_responses_handler(
 
     if !is_stream {
         match state.router.run_turn(unified, None, None).await {
-            Ok((res, bkey, bkind, resolved_qid)) => {
+            Ok((res, bkey, bkind, resolved_qid, eff)) => {
                 let in_tok = if res.usage.input_tokens > 0 { res.usage.input_tokens } else { estimate_tokens_from_chars(est_in_chars) };
                 let out_tok = if res.usage.output_tokens > 0 { res.usage.output_tokens } else { estimate_tokens_from_chars(res.assistant_text.len() + res.thinking_text.len()) };
                 let (cost_usd, eq_usd) = calculate_costs(&s, bkind, &res.model_id, in_tok, out_tok);
@@ -1179,7 +1179,7 @@ async fn openai_responses_handler(
                         method: "POST".into(),
                         path: path_str,
                         model: model_label,
-                        resolved_model: Some(resolved_qid.clone()),
+                        resolved_model: Some(res.model_id.clone()), effort: eff.clone(),
                         backend_key: Some(bkey),
                         status: 200,
                         latency_ms: start.elapsed().as_millis() as u64,
@@ -1314,7 +1314,7 @@ async fn openai_responses_handler(
             }
 
             match turn_result.unwrap() {
-                Ok((res, bkey, bkind, resolved_qid)) => {
+                Ok((res, bkey, bkind, resolved_qid, eff)) => {
                     let in_tok = if res.usage.input_tokens > 0 { res.usage.input_tokens } else if latest_in > 0 { latest_in } else { estimate_tokens_from_chars(est_in_chars) };
                     let out_tok = if res.usage.output_tokens > 0 { res.usage.output_tokens } else if latest_out > 0 { latest_out } else { estimate_tokens_from_chars(res.assistant_text.len() + res.thinking_text.len()) };
                     let (cost_usd, eq_usd) = calculate_costs(&settings_bg, bkind, &res.model_id, in_tok, out_tok);
@@ -1355,7 +1355,7 @@ async fn openai_responses_handler(
                             method: "POST".into(),
                             path: path_bg,
                             model: model_label_bg,
-                            resolved_model: Some(resolved_qid),
+                            resolved_model: Some(res.model_id.clone()), effort: eff.clone(),
                             backend_key: Some(bkey),
                             status: 200,
                             latency_ms: start.elapsed().as_millis() as u64,

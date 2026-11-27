@@ -22,7 +22,27 @@ const BRAND_FILES: Record<string, { src: string; ink?: boolean }> = {
   nvidia: { src: "/brands/nvidia.svg" },
   perplexity: { src: "/brands/perplexity.svg" },
   "hugging-face": { src: "/brands/hugging-face.svg" },
+  devin: { src: "/brands/devin.svg", ink: true },
+  opencode: { src: "/brands/opencode-icon.svg", ink: true },
+  copilot: { src: "/brands/github-copilot.svg", ink: true },
+  cursor: { src: "/brands/cursor-icon.svg", ink: true },
+  cline: { src: "/brands/cline-icon.svg", ink: true },
+  kimi: { src: "/brands/kimi-icon.svg", ink: true },
 };
+
+const FALLBACK_TINTS: Record<string, { bg: string; fg: string }> = {
+  hermes: { bg: "#451a03", fg: "#fcd34d" },
+  custom: { bg: "#27272a", fg: "#a1a1aa" },
+};
+
+const SparkGlyph: React.FC<{ size: number }> = ({ size }) => (
+  <svg width={size * 0.62} height={size * 0.62} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+    <path
+      d="M12 2.5c.7 4.9 4.6 8.8 9.5 9.5-4.9.7-8.8 4.6-9.5 9.5-.7-4.9-4.6-8.8-9.5-9.5 4.9-.7 8.8-4.6 9.5-9.5Z"
+      fill="currentColor"
+    />
+  </svg>
+);
 
 export const BrandIcon: React.FC<BrandIconProps> = ({ brand, size = 18, className = "" }) => {
   const key = brand.toLowerCase();
@@ -42,32 +62,17 @@ export const BrandIcon: React.FC<BrandIconProps> = ({ brand, size = 18, classNam
     );
   }
 
-  // Fallback geometric marks for CLI-native providers without a separate logo file
-  const palette: Record<string, { bg: string; fg: string; text: string }> = {
-    devin: { bg: "#14532d", fg: "#86efac", text: "DV" },
-    opencode: { bg: "#18181b", fg: "#fafafa", text: "OC" },
-    copilot: { bg: "#1f2937", fg: "#93c5fd", text: "CP" },
-    cursor: { bg: "#1c1917", fg: "#e7e5e4", text: "CR" },
-    cline: { bg: "#0f172a", fg: "#38bdf8", text: "CL" },
-    kimi: { bg: "#064e3b", fg: "#6ee7b7", text: "KM" },
-    hermes: { bg: "#451a03", fg: "#fcd34d", text: "HM" },
-    custom: { bg: "#27272a", fg: "#f4f4f5", text: "AC" },
-  };
-  const badge = palette[key] ?? { bg: "#27272a", fg: "#f4f4f5", text: key.slice(0, 2).toUpperCase() };
+  const tint = FALLBACK_TINTS[key] ?? { bg: "#27272a", fg: "#a1a1aa" };
 
   return (
     <span
-      style={{
-        width: size,
-        height: size,
-        backgroundColor: badge.bg,
-        color: badge.fg,
-        fontSize: Math.max(8, Math.round(size * 0.44)),
-      }}
-      className={`inline-flex shrink-0 items-center justify-center rounded-[5px] font-mono font-semibold leading-none ${className}`}
-      aria-hidden="true"
+      style={{ width: size, height: size, backgroundColor: tint.bg, color: tint.fg }}
+      className={`inline-flex shrink-0 items-center justify-center rounded-[5px] ${className}`}
+      role="img"
+      aria-label={brand}
+      title={brand}
     >
-      {badge.text}
+      <SparkGlyph size={size} />
     </span>
   );
 };

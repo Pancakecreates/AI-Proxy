@@ -9,3 +9,7 @@ desktop/dist/
 desktop/src-tauri/target/
 desktop/src-tauri/gen/
 
+
+# tooling / local artifacts
+.playwright-mcp/
+.serena/

@@ -2,6 +2,7 @@ import React, { useMemo, useState } from "react";
 import { Check, Copy, MessageSquare, Search } from "lucide-react";
 import type { BackendModelEntry } from "./types";
 import { BrandIcon } from "./BrandIcon";
+import { Select } from "./Select";
 
 interface ModelsViewProps {
   models: BackendModelEntry[];
@@ -61,18 +62,16 @@ export const ModelsView: React.FC<ModelsViewProps> = ({ models, onTestModel }) =
               className="h-8 w-64 rounded-md border bg-[var(--bg)] pl-8 pr-3 text-xs focus:outline-none focus:ring-1 focus:ring-[var(--accent)]"
             />
           </div>
-          <select
+          <Select
             value={backendFilter}
-            onChange={(e) => setBackendFilter(e.target.value)}
-            className="h-8 rounded-md border bg-[var(--bg)] px-2.5 text-xs"
-          >
-            <option value="all">Все провайдеры ({models.length})</option>
-            {backends.map(([k, lbl]) => (
-              <option key={k} value={k}>
-                {lbl}
-              </option>
-            ))}
-          </select>
+            onChange={setBackendFilter}
+            ariaLabel="Провайдер"
+            className="w-52"
+            options={[
+              { value: "all", label: `Все провайдеры (${models.length})` },
+              ...backends.map(([k, lbl]) => ({ value: k, label: lbl })),
+            ]}
+          />
         </div>
       </div>
 

@@ -516,6 +516,7 @@ pub struct RequestLogEntry {
     pub path: String,
     pub model: String,
     pub resolved_model: Option<String>,
+    pub effort: Option<String>,
     pub backend_key: Option<String>,
     pub status: u16,
     pub latency_ms: u64,

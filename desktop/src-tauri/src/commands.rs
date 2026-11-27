@@ -6,7 +6,7 @@ use crate::models::normalize_effort_value;
 use crate::pricing::{calculate_costs, estimate_tokens_from_chars};
 use crate::quota::{
     check_simple_auth_status, fetch_antigravity_quota, fetch_codex_quota, run_acp_authenticate,
-    run_cli_login_command,
+    run_cli_login_command, run_cli_login_interactive,
 };
 use crate::router::BackendRouter;
 use crate::runtime_installer::install_provider_runtime;
@@ -439,22 +439,27 @@ pub async fn login_provider_account(
         "codex" => {
             let exe = resolve_runtime_executable("codex", &["codex"], s.codex_path.as_deref())
                 .ok_or("Codex CLI не установлен")?;
-            run_cli_login_command(&exe, &["login".into()], &[]).await?
+            run_cli_login_interactive(&exe, &["login".into()], &[], || {
+                check_simple_auth_status(&s).get("codex").copied().unwrap_or(false)
+            }).await?
         }
         "grok" => {
             let exe = resolve_runtime_executable("grok", &["grok"], s.grok_path.as_deref())
                 .ok_or("Grok CLI не установлен")?;
-            run_cli_login_command(
+            run_cli_login_interactive(
                 &exe,
                 &["--no-auto-update".into(), "login".into()],
                 &[("GROK_OAUTH2_REFERRER", "openbot")],
+                || check_simple_auth_status(&s).get("grok").copied().unwrap_or(false),
             )
             .await?
         }
         "copilot" => {
             let exe = resolve_runtime_executable("copilot", &["copilot"], s.copilot_path.as_deref())
                 .ok_or("Copilot CLI не установлен")?;
-            run_cli_login_command(&exe, &["login".into()], &[]).await?
+            run_cli_login_interactive(&exe, &["login".into()], &[], || {
+                check_simple_auth_status(&s).get("copilot").copied().unwrap_or(false)
+            }).await?
         }
         "opencode" => {
             let exe = resolve_runtime_executable("opencode", &["opencode"], s.opencode_path.as_deref())
@@ -705,7 +710,7 @@ pub async fn send_chat_message(
 
     let s = state.settings.read().await.clone();
     match turn_res {
-        Ok((res, bkey, bkind, resolved_qid)) => {
+        Ok((res, bkey, bkind, _resolved_qid, eff)) => {
             let in_tok = if res.usage.input_tokens > 0 { res.usage.input_tokens } else { estimate_tokens_from_chars(est_chars) };
             let out_tok = if res.usage.output_tokens > 0 { res.usage.output_tokens } else { estimate_tokens_from_chars(res.assistant_text.len() + res.thinking_text.len()) };
             let (cost_usd, eq_usd) = calculate_costs(&s, bkind, &res.model_id, in_tok, out_tok);
@@ -720,7 +725,7 @@ pub async fn send_chat_message(
                 method: "CHAT".into(),
                 path: "/sandbox".into(),
                 model: model_id.clone(),
-                resolved_model: Some(resolved_qid),
+                resolved_model: Some(res.model_id.clone()), effort: eff.clone(),
                 backend_key: Some(bkey),
                 status: 200,
                 latency_ms,

@@ -216,6 +216,7 @@ export interface RequestLogEntry {
   path: string;
   model: string;
   resolvedModel: string | null;
+  effort: string | null;
   backendKey: string | null;
   status: number;
   latencyMs: number;

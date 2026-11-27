@@ -4,6 +4,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { FolderOpen, Save, Check, RefreshCw, Download, ExternalLink, Loader2 } from "lucide-react";
 import type { AppSettings, AppUpdateInfo, DevinMode, OpenCodeFilterMode, ProcessModel, ShowToolsMode, SpeedMode, ThoughtLevel } from "./types";
+import { Select } from "./Select";
 
 interface SettingsViewProps {
   settings: AppSettings;
@@ -104,45 +105,44 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </button>
         </div>
 
-        {/* Appearance & System */}
         <section className="rounded-lg border bg-[var(--bg-elevated)] p-4 space-y-4">
           <h2 className="text-sm font-semibold">Внешний вид и поведение</h2>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
             <label className="space-y-1">
               <span className="text-[var(--fg-muted)]">Тема</span>
-              <select
+              <Select
                 value={draft.theme}
-                onChange={(e) => setDraft({ ...draft, theme: e.target.value as AppSettings["theme"] })}
-                className="h-8 w-full rounded-md border bg-[var(--bg)] px-2.5"
-              >
-                <option value="auto">Авто (система)</option>
-                <option value="dark">Тёмная</option>
-                <option value="light">Светлая</option>
-              </select>
+                onChange={(v) => setDraft({ ...draft, theme: v as AppSettings["theme"] })}
+                options={[
+                  { value: "auto", label: "Авто (система)" },
+                  { value: "dark", label: "Тёмная" },
+                  { value: "light", label: "Светлая" },
+                ]}
+              />
             </label>
             <label className="space-y-1">
               <span className="text-[var(--fg-muted)]">Акцентный цвет</span>
-              <select
+              <Select
                 value={draft.accent}
-                onChange={(e) => setDraft({ ...draft, accent: e.target.value as AppSettings["accent"] })}
-                className="h-8 w-full rounded-md border bg-[var(--bg)] px-2.5"
-              >
-                <option value="copper">Copper (Медь)</option>
-                <option value="emerald">Emerald (Изумруд)</option>
-                <option value="cobalt">Cobalt (Кобальт)</option>
-                <option value="zinc">Graphite (Монохром)</option>
-              </select>
+                onChange={(v) => setDraft({ ...draft, accent: v as AppSettings["accent"] })}
+                options={[
+                  { value: "copper", label: "Оранжевый" },
+                  { value: "emerald", label: "Зелёный" },
+                  { value: "cobalt", label: "Синий" },
+                  { value: "zinc", label: "Серый" },
+                ]}
+              />
             </label>
             <label className="space-y-1">
               <span className="text-[var(--fg-muted)]">Плотность интерфейса</span>
-              <select
+              <Select
                 value={draft.density}
-                onChange={(e) => setDraft({ ...draft, density: e.target.value as AppSettings["density"] })}
-                className="h-8 w-full rounded-md border bg-[var(--bg)] px-2.5"
-              >
-                <option value="comfortable">Обычная</option>
-                <option value="compact">Компактная</option>
-              </select>
+                onChange={(v) => setDraft({ ...draft, density: v as AppSettings["density"] })}
+                options={[
+                  { value: "comfortable", label: "Обычная" },
+                  { value: "compact", label: "Компактная" },
+                ]}
+              />
             </label>
           </div>
 
@@ -199,7 +199,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
         </section>
 
-        {/* Updates */}
         <section className="rounded-lg border bg-[var(--bg-elevated)] p-4 space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
@@ -251,7 +250,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           )}
         </section>
 
-        {/* HTTP Gateways */}
         <section className="rounded-lg border bg-[var(--bg-elevated)] p-4 space-y-4">
           <h2 className="text-sm font-semibold">HTTP шлюзы (Anthropic и OpenAI)</h2>
           <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs">
@@ -323,7 +321,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
         </section>
 
-        {/* ACP & Engine Settings */}
         <section className="rounded-lg border bg-[var(--bg-elevated)] p-4 space-y-4">
           <h2 className="text-sm font-semibold">Движки ACP и параметры моделей</h2>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
@@ -346,82 +343,75 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </label>
             <label className="space-y-1">
               <span className="text-[var(--fg-muted)]">Режим прав</span>
-              <select
+              <Select
                 value={draft.mode}
-                onChange={(e) => setDraft({ ...draft, mode: e.target.value as DevinMode })}
-                className="h-8 w-full rounded-md border bg-[var(--bg)] px-2.5"
-              >
-                <option value="bypass">bypass</option>
-                <option value="accept-edits">accept-edits</option>
-                <option value="smart">smart</option>
-                <option value="ask">ask</option>
-                <option value="plan">plan</option>
-              </select>
+                onChange={(v) => setDraft({ ...draft, mode: v as DevinMode })}
+                options={["bypass", "accept-edits", "smart", "ask", "plan"].map((v) => ({ value: v, label: v }))}
+              />
             </label>
             <label className="space-y-1">
               <span className="text-[var(--fg-muted)]">Effort по умолчанию</span>
-              <select
+              <Select
                 value={draft.thoughtLevel ?? ""}
-                onChange={(e) =>
-                  setDraft({ ...draft, thoughtLevel: (e.target.value || null) as ThoughtLevel | null })
+                onChange={(v) =>
+                  setDraft({ ...draft, thoughtLevel: (v || null) as ThoughtLevel | null })
                 }
-                className="h-8 w-full rounded-md border bg-[var(--bg)] px-2.5"
-              >
-                <option value="">По выбору клиента</option>
-                {["none", "minimal", "low", "medium", "high", "xhigh", "max"].map((v) => (
-                  <option key={v} value={v}>
-                    {v}
-                  </option>
-                ))}
-              </select>
+                options={[
+                  { value: "", label: "По выбору клиента" },
+                  ...["none", "minimal", "low", "medium", "high", "xhigh", "max"].map((v) => ({
+                    value: v,
+                    label: v,
+                  })),
+                ]}
+              />
             </label>
             <label className="space-y-1">
               <span className="text-[var(--fg-muted)]">Скорость</span>
-              <select
+              <Select
                 value={draft.speed ?? ""}
-                onChange={(e) => setDraft({ ...draft, speed: (e.target.value || null) as SpeedMode | null })}
-                className="h-8 w-full rounded-md border bg-[var(--bg)] px-2.5"
-              >
-                <option value="">По умолчанию</option>
-                <option value="standard">standard</option>
-                <option value="fast">fast</option>
-                <option value="ultrafast">ultrafast</option>
-              </select>
+                onChange={(v) => setDraft({ ...draft, speed: (v || null) as SpeedMode | null })}
+                options={[
+                  { value: "", label: "По умолчанию" },
+                  { value: "standard", label: "standard" },
+                  { value: "fast", label: "fast" },
+                  { value: "ultrafast", label: "ultrafast" },
+                ]}
+              />
             </label>
             <label className="space-y-1">
               <span className="text-[var(--fg-muted)]">Отображение tool calls</span>
-              <select
+              <Select
                 value={draft.showTools}
-                onChange={(e) => setDraft({ ...draft, showTools: e.target.value as ShowToolsMode })}
-                className="h-8 w-full rounded-md border bg-[var(--bg)] px-2.5"
-              >
-                <option value="thinking">В блоке мыслей</option>
-                <option value="text">В тексте ответа</option>
-                <option value="none">Скрывать</option>
-              </select>
+                onChange={(v) => setDraft({ ...draft, showTools: v as ShowToolsMode })}
+                options={[
+                  { value: "thinking", label: "В блоке мыслей" },
+                  { value: "text", label: "В тексте ответа" },
+                  { value: "none", label: "Скрывать" },
+                ]}
+              />
             </label>
             <label className="space-y-1">
               <span className="text-[var(--fg-muted)]">Фильтр OpenCode</span>
-              <select
+              <Select
                 value={draft.opencodeFilter}
-                onChange={(e) => setDraft({ ...draft, opencodeFilter: e.target.value as OpenCodeFilterMode })}
-                className="h-8 w-full rounded-md border bg-[var(--bg)] px-2.5"
-              >
-                <option value="go-free">Go + Бесплатные</option>
-                <option value="all">Все модели</option>
-                <option value="custom">Свой список провайдеров</option>
-              </select>
+                onChange={(v) => setDraft({ ...draft, opencodeFilter: v as OpenCodeFilterMode })}
+                options={[
+                  { value: "go-free", label: "Go + Бесплатные" },
+                  { value: "all", label: "Все модели" },
+                  { value: "custom", label: "Свой список провайдеров" },
+                ]}
+              />
             </label>
             <label className="space-y-1">
               <span className="text-[var(--fg-muted)]">Devin Process Model</span>
-              <select
+              <Select
                 value={draft.processModel}
-                onChange={(e) => setDraft({ ...draft, processModel: e.target.value as ProcessModel })}
-                className="h-8 w-full rounded-md border bg-[var(--bg)] px-2.5"
-              >
-                <option value="in-process">in-process</option>
-                <option value="daemon">daemon</option>
-              </select>
+                onChange={(v) => setDraft({ ...draft, processModel: v as ProcessModel })}
+                options={[
+                  { value: "in-process", label: "in-process" },
+                  { value: "daemon", label: "daemon" },
+                ]}
+              />
             </label>
             <label className="space-y-1">
               <span className="text-[var(--fg-muted)]">XAI API Key (Grok, опц.)</span>

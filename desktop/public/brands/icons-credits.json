@@ -24,6 +24,18 @@
     "markUrl": "https://claude.ai/"
   },
   {
+    "file": "cline-icon.svg",
+    "icon": "logos:cline-icon",
+    "name": "Cline",
+    "kind": "colour",
+    "source": "gilbarbara/logos@875d71c5a8e4aa90a33f8b3ea15b8945de9cc183",
+    "author": "Gil Barbara",
+    "licence": "CC0-1.0",
+    "url": "https://github.com/gilbarbara/logos",
+    "trademark": true,
+    "markUrl": "https://cline.bot"
+  },
+  {
     "file": "cohere.svg",
     "icon": "logos:cohere-icon",
     "name": "Cohere",
@@ -34,6 +46,18 @@
     "url": "https://github.com/gilbarbara/logos",
     "trademark": true,
     "markUrl": "https://cohere.com"
+  },
+  {
+    "file": "cursor-icon.svg",
+    "icon": "logos:cursor-icon",
+    "name": "Cursor",
+    "kind": "colour",
+    "source": "gilbarbara/logos@875d71c5a8e4aa90a33f8b3ea15b8945de9cc183",
+    "author": "Gil Barbara",
+    "licence": "CC0-1.0",
+    "url": "https://github.com/gilbarbara/logos",
+    "trademark": true,
+    "markUrl": "https://cursor.com"
   },
   {
     "file": "deepseek.svg",
@@ -48,6 +72,18 @@
     "markUrl": "https://www.deepseek.com/en/"
   },
   {
+    "file": "devin.svg",
+    "icon": "logos:devin",
+    "name": "Devin",
+    "kind": "colour",
+    "source": "gilbarbara/logos@875d71c5a8e4aa90a33f8b3ea15b8945de9cc183",
+    "author": "Gil Barbara",
+    "licence": "CC0-1.0",
+    "url": "https://github.com/gilbarbara/logos",
+    "trademark": true,
+    "markUrl": "https://devin.ai"
+  },
+  {
     "file": "gemini.svg",
     "icon": "logos:google-gemini-icon",
     "name": "Gemini",
@@ -58,6 +94,18 @@
     "url": "https://github.com/gilbarbara/logos",
     "trademark": true,
     "markUrl": "https://deepmind.google/technologies/gemini/"
+  },
+  {
+    "file": "github-copilot.svg",
+    "icon": "logos:github-copilot",
+    "name": "GitHub Copilot",
+    "kind": "colour",
+    "source": "gilbarbara/logos@875d71c5a8e4aa90a33f8b3ea15b8945de9cc183",
+    "author": "Gil Barbara",
+    "licence": "CC0-1.0",
+    "url": "https://github.com/gilbarbara/logos",
+    "trademark": true,
+    "markUrl": "https://github.com/features/copilot"
   },
   {
     "file": "grok.svg",
@@ -82,6 +130,18 @@
     "url": "https://github.com/gilbarbara/logos",
     "trademark": true,
     "markUrl": "https://huggingface.co/"
+  },
+  {
+    "file": "kimi-icon.svg",
+    "icon": "logos:kimi-icon",
+    "name": "Kimi",
+    "kind": "colour",
+    "source": "gilbarbara/logos@875d71c5a8e4aa90a33f8b3ea15b8945de9cc183",
+    "author": "Gil Barbara",
+    "licence": "CC0-1.0",
+    "url": "https://github.com/gilbarbara/logos",
+    "trademark": true,
+    "markUrl": "https://kimi.ai"
   },
   {
     "file": "meta.svg",
@@ -130,6 +190,18 @@
     "url": "https://github.com/gilbarbara/logos",
     "trademark": true,
     "markUrl": "https://openai.com/"
+  },
+  {
+    "file": "opencode-icon.svg",
+    "icon": "logos:opencode-icon",
+    "name": "OpenCode",
+    "kind": "colour",
+    "source": "gilbarbara/logos@875d71c5a8e4aa90a33f8b3ea15b8945de9cc183",
+    "author": "Gil Barbara",
+    "licence": "CC0-1.0",
+    "url": "https://github.com/gilbarbara/logos",
+    "trademark": true,
+    "markUrl": "https://opencode.ai"
   },
   {
     "file": "perplexity.svg",
