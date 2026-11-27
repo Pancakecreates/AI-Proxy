@@ -491,6 +491,7 @@ pub struct AccountQuotaReport {
 pub struct TurnUsage {
     pub input_tokens: u64,
     pub output_tokens: u64,
+    pub cache_read_tokens: u64,
     pub thinking_tokens: u64,
     pub measured: bool,
 }
@@ -523,6 +524,7 @@ pub struct RequestLogEntry {
     pub latency_ms: u64,
     pub input_tokens: u64,
     pub output_tokens: u64,
+    pub cache_read_tokens: u64,
     pub thinking_tokens: u64,
     pub usage_source: String,
     pub cost_usd: f64,
@@ -562,6 +564,7 @@ pub struct UsageSummary {
     pub error_requests: u64,
     pub total_input_tokens: u64,
     pub total_output_tokens: u64,
+    pub total_cache_read_tokens: u64,
     pub total_thinking_tokens: u64,
     pub total_cost_usd: f64,
     pub total_api_equivalent_usd: f64,

@@ -14,7 +14,7 @@ import {
   ArrowDownToLine,
 } from "lucide-react";
 import type { AppUpdateInfo, ProxyRuntimeStatus } from "./types";
-import { Badge, Button } from "./components/ui";
+import { Button } from "./components/ui";
 
 interface TitleBarProps {
   status: ProxyRuntimeStatus | null;
@@ -89,21 +89,6 @@ export const TitleBar: React.FC<TitleBarProps> = ({
         <span data-tauri-drag-region className="text-[13px] font-semibold tracking-[-0.015em] text-[var(--fg)]">
           AI Proxy
         </span>
-        <Badge
-          variant={starting ? "warning" : running ? "success" : "neutral"}
-          className="rounded-full px-2 py-0.5 text-[11px]"
-        >
-          <span
-            className={`size-1.5 rounded-full ${
-              starting
-                ? "bg-[var(--warning)] animate-pulse"
-                : running
-                  ? "bg-[var(--success)]"
-                  : "bg-[var(--fg-subtle)]"
-            }`}
-          />
-          {starting ? "Запуск..." : running ? `Активен · ${status?.modelsCount ?? 0} мод.` : "Остановлен"}
-        </Badge>
       </div>
 
       <div className="flex h-full items-center gap-1">

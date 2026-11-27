@@ -44,6 +44,7 @@ impl AppDb {
                 latency_ms INTEGER NOT NULL,
                 input_tokens INTEGER NOT NULL,
                 output_tokens INTEGER NOT NULL,
+                cache_read_tokens INTEGER NOT NULL,
                 thinking_tokens INTEGER NOT NULL,
                 usage_source TEXT NOT NULL,
                 cost_usd REAL NOT NULL,
@@ -100,6 +101,10 @@ impl AppDb {
 
         let _ = conn.execute("ALTER TABLE request_logs ADD COLUMN effort TEXT", []);
         let _ = conn.execute("ALTER TABLE request_logs ADD COLUMN account_label TEXT", []);
+        let _ = conn.execute(
+            "ALTER TABLE request_logs ADD COLUMN cache_read_tokens INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
 
         Ok(Self { conn: Mutex::new(conn) })
     }
@@ -181,8 +186,9 @@ impl AppDb {
             "INSERT INTO request_logs (
                 created_at, request_id, protocol, method, path, model, resolved_model, effort,
                 backend_key, account_label, status, latency_ms, input_tokens, output_tokens, thinking_tokens,
-                usage_source, cost_usd, api_equivalent_usd, error, prompt_preview, response_preview
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
+                usage_source, cost_usd, api_equivalent_usd, error, prompt_preview, response_preview,
+                cache_read_tokens
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
             params![
                 entry.created_at,
                 entry.request_id,
@@ -205,6 +211,7 @@ impl AppDb {
                 entry.error,
                 entry.prompt_preview,
                 entry.response_preview,
+                entry.cache_read_tokens as i64,
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -223,7 +230,8 @@ impl AppDb {
         let sql = if q.is_some() {
             "SELECT id, created_at, request_id, protocol, method, path, model, resolved_model, effort,
                     backend_key, account_label, status, latency_ms, input_tokens, output_tokens, thinking_tokens,
-                    usage_source, cost_usd, api_equivalent_usd, error, prompt_preview, response_preview
+                    usage_source, cost_usd, api_equivalent_usd, error, prompt_preview, response_preview,
+                    cache_read_tokens
              FROM request_logs
              WHERE lower(model) LIKE ?1 OR lower(coalesce(resolved_model,'')) LIKE ?1
                 OR lower(coalesce(backend_key,'')) LIKE ?1 OR lower(coalesce(account_label,'')) LIKE ?1
@@ -233,7 +241,8 @@ impl AppDb {
         } else {
             "SELECT id, created_at, request_id, protocol, method, path, model, resolved_model, effort,
                     backend_key, account_label, status, latency_ms, input_tokens, output_tokens, thinking_tokens,
-                    usage_source, cost_usd, api_equivalent_usd, error, prompt_preview, response_preview
+                    usage_source, cost_usd, api_equivalent_usd, error, prompt_preview, response_preview,
+                    cache_read_tokens
              FROM request_logs
              ORDER BY id DESC LIMIT ?1"
         };
@@ -263,6 +272,7 @@ impl AppDb {
                 error: row.get(19)?,
                 prompt_preview: row.get(20)?,
                 response_preview: row.get(21)?,
+                cache_read_tokens: row.get::<_, i64>(22)? as u64,
             })
         };
 
@@ -367,7 +377,7 @@ impl AppDb {
             .prepare(
                 "SELECT created_at, coalesce(resolved_model, model), coalesce(backend_key, 'unknown'),
                         status, latency_ms, input_tokens, output_tokens, thinking_tokens,
-                        usage_source, cost_usd, api_equivalent_usd
+                        usage_source, cost_usd, api_equivalent_usd, cache_read_tokens
                  FROM request_logs
                  WHERE created_at >= ?1
                  ORDER BY created_at ASC",
@@ -380,6 +390,7 @@ impl AppDb {
             error_requests: 0,
             total_input_tokens: 0,
             total_output_tokens: 0,
+            total_cache_read_tokens: 0,
             total_thinking_tokens: 0,
             total_cost_usd: 0.0,
             total_api_equivalent_usd: 0.0,
@@ -410,12 +421,13 @@ impl AppDb {
                     r.get::<_, String>(8)?,
                     r.get::<_, f64>(9)?,
                     r.get::<_, f64>(10)?,
+                    r.get::<_, i64>(11)? as u64,
                 ))
             })
             .map_err(|e| e.to_string())?;
 
         for row in rows {
-            let (created_at, model, backend, status, latency, in_tok, out_tok, think_tok, src, cost, eq_cost) =
+            let (created_at, model, backend, status, latency, in_tok, out_tok, think_tok, src, cost, eq_cost, cache_tok) =
                 row.map_err(|e| e.to_string())?;
             summary.total_requests += 1;
             if (200..400).contains(&status) {
@@ -425,6 +437,7 @@ impl AppDb {
             }
             summary.total_input_tokens += in_tok;
             summary.total_output_tokens += out_tok;
+            summary.total_cache_read_tokens += cache_tok;
             summary.total_thinking_tokens += think_tok;
             summary.total_cost_usd += cost;
             summary.total_api_equivalent_usd += eq_cost;

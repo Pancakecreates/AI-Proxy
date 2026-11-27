@@ -979,6 +979,7 @@ impl AcpBackend {
             let mut thinking_text = String::new();
             let mut input_tokens = 0u64;
             let mut output_tokens = 0u64;
+            let mut cache_read_tokens = 0u64;
             let mut measured = false;
             let mut seen_tools: HashMap<String, (String, String, bool)> = HashMap::new();
 
@@ -995,9 +996,17 @@ impl AcpBackend {
                         .and_then(|m| m.get("cognition.ai/outputTokens"))
                         .and_then(|v| v.as_u64())
                         .unwrap_or(0);
+                    let cached = meta
+                        .and_then(|m| {
+                            m.get("cognition.ai/cacheReadTokens")
+                                .or_else(|| m.get("cognition.ai/cachedReadTokens"))
+                        })
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
                     if inp > 0 || out > 0 {
                         input_tokens = inp;
                         output_tokens = out;
+                        cache_read_tokens = cached;
                         measured = true;
                         if let Some(s) = &sink_clone {
                             let _ = s.send(StreamEvent::Usage {
@@ -1075,7 +1084,14 @@ impl AcpBackend {
                     }
                 }
             }
-            (assistant_text, thinking_text, input_tokens, output_tokens, measured)
+            (
+                assistant_text,
+                thinking_text,
+                input_tokens,
+                output_tokens,
+                cache_read_tokens,
+                measured,
+            )
         });
 
         let prompt_fut = self.rpc_request_idle(
@@ -1098,7 +1114,7 @@ impl AcpBackend {
 
         self.session_sinks.lock().await.remove(&sid_clone);
         self.clear_tools(Some(&sid_clone)).await;
-        let (assistant_text, thinking_text, mut input_tokens, mut output_tokens, mut measured) =
+        let (assistant_text, thinking_text, mut input_tokens, mut output_tokens, mut cache_read_tokens, mut measured) =
             collector.await.unwrap_or_default();
 
         match prompt_res {
@@ -1106,9 +1122,16 @@ impl AcpBackend {
                 if let Some(usage) = res.get("usage") {
                     let inp = usage.get("inputTokens").and_then(|v| v.as_u64()).unwrap_or(0);
                     let out = usage.get("outputTokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let cached = usage
+                        .get("cacheReadTokens")
+                        .or_else(|| usage.get("cache_read_input_tokens"))
+                        .or_else(|| usage.get("cachedInputTokens"))
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
                     if inp > 0 || out > 0 {
                         input_tokens = inp;
                         output_tokens = out;
+                        cache_read_tokens = cached;
                         measured = true;
                     }
                 }
@@ -1134,6 +1157,7 @@ impl AcpBackend {
                     usage: TurnUsage {
                         input_tokens,
                         output_tokens,
+                        cache_read_tokens,
                         thinking_tokens,
                         measured,
                     },

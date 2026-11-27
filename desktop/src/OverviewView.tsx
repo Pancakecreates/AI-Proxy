@@ -1,8 +1,9 @@
 import React, { useState } from "react";
-import { Check, Copy, RefreshCw, Terminal, ArrowUpRight } from "lucide-react";
+import { Check, Copy, RefreshCw, Terminal, KeyRound } from "lucide-react";
 import type { AppSettings, ProxyRuntimeStatus, UsageSummary } from "./types";
 import { BrandIcon } from "./BrandIcon";
 import { Badge, Button, Panel, PanelHeader, PanelTitle } from "./components/ui";
+import { formatDuration, formatTokens, ruNumber } from "./format";
 
 interface OverviewViewProps {
   status: ProxyRuntimeStatus | null;
@@ -12,6 +13,36 @@ interface OverviewViewProps {
   warmingUp: boolean;
   onNavigate: (tab: string) => void;
 }
+
+function shorten(value: string, head = 12, tail = 5): string {
+  return value.length > head + tail + 1 ? `${value.slice(0, head)}…${value.slice(-tail)}` : value;
+}
+
+const CopyGlyph: React.FC<{ active: boolean }> = ({ active }) =>
+  active ? <Check className="size-3.5 text-[var(--success)]" /> : <Copy className="size-3.5" />;
+
+const CopyField: React.FC<{
+  label: string;
+  display: string;
+  copied: boolean;
+  copyTitle: string;
+  onCopy: () => void;
+}> = ({ label, display, copied, copyTitle, onCopy }) => (
+  <div className="flex items-center gap-2 rounded-[7px] border border-[var(--border)] bg-[var(--bg)] py-1 pl-2.5 pr-1">
+    <span className="w-10 shrink-0 text-[10px] font-medium text-[var(--fg-subtle)]">{label}</span>
+    <span className="min-w-0 flex-1 truncate text-[11px] text-[var(--fg)]">{display}</span>
+    <Button
+      variant="ghost"
+      size="icon"
+      onClick={onCopy}
+      title={copied ? "Скопировано" : copyTitle}
+      aria-label={copyTitle}
+      className="size-6 rounded-[5px] text-[var(--fg-muted)] hover:text-[var(--fg)]"
+    >
+      <CopyGlyph active={copied} />
+    </Button>
+  </div>
+);
 
 export const OverviewView: React.FC<OverviewViewProps> = ({
   status,
@@ -32,8 +63,12 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
   const anthropicUrl = status?.anthropicUrl ?? `http://${settings.host}:${settings.anthropicPort}`;
   const openaiUrl =
     status?.openaiUrl ?? `http://${settings.host}:${settings.openaiPort}/v1`;
+  const apiToken = settings.apiKey || "local-proxy";
 
-  const totalTokens = (usage?.totalInputTokens ?? 0) + (usage?.totalOutputTokens ?? 0);
+  const inputTokens = usage?.totalInputTokens ?? 0;
+  const outputTokens = usage?.totalOutputTokens ?? 0;
+  const cacheTokens = usage?.totalCacheReadTokens ?? 0;
+  const totalTokens = inputTokens + outputTokens;
 
   return (
     <div className="flex flex-col gap-5 p-6 max-w-6xl mx-auto">
@@ -76,6 +111,9 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
             <div className="mt-1 text-[11px] text-[var(--fg-subtle)] tabular-nums">
               Измерено: {usage?.measuredCount ?? 0} · Оценка: {usage?.estimatedCount ?? 0}
             </div>
+            <div className="text-[11px] text-[var(--fg-subtle)] tabular-nums">
+              Средний ответ: {formatDuration(usage?.avgLatencyMs ?? 0)}
+            </div>
           </div>
 
           <div className="p-4">
@@ -89,12 +127,16 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
           </div>
 
           <div className="p-4">
-            <div className="text-[11px] font-medium text-[var(--fg-muted)]">Токены и задержка</div>
-            <div className="mt-1 text-2xl font-semibold tracking-[-0.02em] tabular-nums">
-              {totalTokens > 1000 ? `${(totalTokens / 1000).toFixed(1)}k` : totalTokens}
+            <div className="text-[11px] font-medium text-[var(--fg-muted)]">Токены</div>
+            <div
+              className="mt-1 text-2xl font-semibold tracking-[-0.02em] tabular-nums"
+              title={ruNumber(totalTokens)}
+            >
+              {formatTokens(totalTokens)}
             </div>
-            <div className="mt-1 text-[11px] text-[var(--fg-subtle)] tabular-nums">
-              Средний ответ: {Math.round(usage?.avgLatencyMs ?? 0)} мс
+            <div className="mt-1 text-[11px] text-[var(--fg-subtle)] tabular-nums leading-relaxed">
+              вход {formatTokens(inputTokens)} · выход {formatTokens(outputTokens)}
+              {cacheTokens > 0 && ` · кеш ${formatTokens(cacheTokens)}`}
             </div>
           </div>
         </div>
@@ -118,38 +160,46 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
             </Badge>
           </div>
 
-          <div className="flex items-center justify-between rounded-[7px] border bg-[var(--bg)] px-3 py-1.5 text-xs tabular-nums">
-            <span className="truncate">{anthropicUrl}</span>
-            <button
-              type="button"
-              onClick={() => copyText("anth-url", anthropicUrl)}
-              className="ml-2 inline-flex items-center gap-1 text-[11px] font-sans font-medium text-[var(--accent)] hover:underline shrink-0"
-            >
-              {copied === "anth-url" ? <Check className="size-3" /> : <Copy className="size-3" />}
-              <span>{copied === "anth-url" ? "Скопировано" : "URL"}</span>
-            </button>
+          <div className="space-y-1.5">
+            <CopyField
+              label="URL"
+              display={anthropicUrl}
+              copied={copied === "anth-url"}
+              copyTitle="Скопировать URL"
+              onCopy={() => copyText("anth-url", anthropicUrl)}
+            />
+            <CopyField
+              label="Токен"
+              display={shorten(apiToken)}
+              copied={copied === "anth-token"}
+              copyTitle="Скопировать токен"
+              onCopy={() => copyText("anth-token", apiToken)}
+            />
           </div>
 
           <div className="rounded-[7px] border bg-[var(--bg)] p-2.5 text-[11px] text-[var(--fg-muted)] space-y-1">
-            <div className="flex items-center justify-between">
-              <span className="flex items-center gap-1.5 text-[var(--fg)] font-sans font-medium">
-                <Terminal className="size-3 text-[var(--fg-subtle)]" /> Claude Code (~/.claude/settings.json)
+            <div className="flex items-center justify-between gap-2">
+              <span className="flex min-w-0 items-center gap-1.5 font-medium text-[var(--fg)]">
+                <Terminal className="size-3 shrink-0 text-[var(--fg-subtle)]" />
+                <span className="truncate">Claude Code · ~/.claude/settings.json</span>
               </span>
-              <button
-                type="button"
+              <Button
+                variant="secondary"
+                size="xs"
+                className="h-6 px-2"
                 onClick={() =>
                   copyText(
                     "cc-cmd",
-                    `ANTHROPIC_BASE_URL=${anthropicUrl}\nANTHROPIC_AUTH_TOKEN=${settings.apiKey || "local-proxy"}`
+                    `ANTHROPIC_BASE_URL=${anthropicUrl}\nANTHROPIC_AUTH_TOKEN=${apiToken}`
                   )
                 }
-                className="text-[11px] font-sans font-medium text-[var(--accent)] hover:underline"
               >
-                {copied === "cc-cmd" ? "Готово" : "Копировать"}
-              </button>
+                <CopyGlyph active={copied === "cc-cmd"} />
+                <span>{copied === "cc-cmd" ? "Готово" : "Конфиг"}</span>
+              </Button>
             </div>
             <div className="truncate">ANTHROPIC_BASE_URL={anthropicUrl}</div>
-            <div className="truncate">ANTHROPIC_AUTH_TOKEN={settings.apiKey || "local-proxy"}</div>
+            <div className="truncate">ANTHROPIC_AUTH_TOKEN={shorten(apiToken)}</div>
           </div>
         </Panel>
 
@@ -170,38 +220,43 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
             </Badge>
           </div>
 
-          <div className="flex items-center justify-between rounded-[7px] border bg-[var(--bg)] px-3 py-1.5 text-xs tabular-nums">
-            <span className="truncate">{openaiUrl}</span>
-            <button
-              type="button"
-              onClick={() => copyText("oai-url", openaiUrl)}
-              className="ml-2 inline-flex items-center gap-1 text-[11px] font-sans font-medium text-[var(--accent)] hover:underline shrink-0"
-            >
-              {copied === "oai-url" ? <Check className="size-3" /> : <Copy className="size-3" />}
-              <span>{copied === "oai-url" ? "Скопировано" : "URL"}</span>
-            </button>
+          <div className="space-y-1.5">
+            <CopyField
+              label="URL"
+              display={openaiUrl}
+              copied={copied === "oai-url"}
+              copyTitle="Скопировать URL"
+              onCopy={() => copyText("oai-url", openaiUrl)}
+            />
+            <CopyField
+              label="Токен"
+              display={shorten(apiToken)}
+              copied={copied === "oai-token"}
+              copyTitle="Скопировать токен"
+              onCopy={() => copyText("oai-token", apiToken)}
+            />
           </div>
 
           <div className="rounded-[7px] border bg-[var(--bg)] p-2.5 text-[11px] text-[var(--fg-muted)] space-y-1">
-            <div className="flex items-center justify-between">
-              <span className="flex items-center gap-1.5 text-[var(--fg)] font-sans font-medium">
-                <Terminal className="size-3 text-[var(--fg-subtle)]" /> Codex CLI и OpenAI SDK
+            <div className="flex items-center justify-between gap-2">
+              <span className="flex min-w-0 items-center gap-1.5 font-medium text-[var(--fg)]">
+                <Terminal className="size-3 shrink-0 text-[var(--fg-subtle)]" />
+                <span className="truncate">Codex CLI и OpenAI SDK</span>
               </span>
-              <button
-                type="button"
+              <Button
+                variant="secondary"
+                size="xs"
+                className="h-6 px-2"
                 onClick={() =>
-                  copyText(
-                    "oai-cmd",
-                    `OPENAI_BASE_URL=${openaiUrl}\nOPENAI_API_KEY=${settings.apiKey || "local-proxy"}`
-                  )
+                  copyText("oai-cmd", `OPENAI_BASE_URL=${openaiUrl}\nOPENAI_API_KEY=${apiToken}`)
                 }
-                className="text-[11px] font-sans font-medium text-[var(--accent)] hover:underline"
               >
-                {copied === "oai-cmd" ? "Готово" : "Копировать"}
-              </button>
+                <CopyGlyph active={copied === "oai-cmd"} />
+                <span>{copied === "oai-cmd" ? "Готово" : "Конфиг"}</span>
+              </Button>
             </div>
             <div className="truncate">OPENAI_BASE_URL={openaiUrl}</div>
-            <div className="truncate">OPENAI_API_KEY={settings.apiKey || "local-proxy"}</div>
+            <div className="truncate">OPENAI_API_KEY={shorten(apiToken)}</div>
           </div>
         </Panel>
       </div>
@@ -209,14 +264,10 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
       <Panel className="overflow-hidden">
         <PanelHeader>
           <PanelTitle>Активные бэкенды</PanelTitle>
-          <button
-            type="button"
-            onClick={() => onNavigate("accounts")}
-            className="inline-flex items-center gap-1 text-xs font-medium text-[var(--accent)] hover:underline"
-          >
+          <Button variant="secondary" size="xs" onClick={() => onNavigate("accounts")}>
+            <KeyRound className="size-3" />
             <span>Аккаунты и лимиты</span>
-            <ArrowUpRight className="size-3.5" />
-          </button>
+          </Button>
         </PanelHeader>
         <div className="divide-y">
           {(status?.backends ?? []).length === 0 ? (

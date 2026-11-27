@@ -224,6 +224,7 @@ export const LogsView: React.FC<LogsViewProps> = ({
                             </td>
                             <td className="py-[var(--density-cell-y)] px-3 text-right tabular-nums text-[var(--fg-muted)] whitespace-nowrap">
                               ↑ {r.inputTokens.toLocaleString()} · ↓ {r.outputTokens.toLocaleString()}
+                              {r.cacheReadTokens > 0 && ` · кеш ${r.cacheReadTokens.toLocaleString()}`}
                             </td>
                             <td className="py-[var(--density-cell-y)] px-3 text-right tabular-nums text-[var(--fg-muted)] whitespace-nowrap">
                               {r.latencyMs} мс

@@ -9,6 +9,7 @@ import type {
 import { BrandIcon } from "./BrandIcon";
 import { resolveAccountInfo } from "./backendDisplay";
 import { Button, Panel, PanelHeader, PanelTitle, Segmented } from "./components/ui";
+import { formatDuration, formatTokens } from "./format";
 
 interface UsageViewProps {
   usage: UsageSummary | null;
@@ -94,11 +95,12 @@ export const UsageView: React.FC<UsageViewProps> = ({
             <div className="p-4">
               <div className="text-[11px] font-medium text-[var(--fg-muted)]">Токены</div>
               <div className="mt-1 text-2xl font-semibold tracking-[-0.02em] tabular-nums">
-                {((usage?.totalInputTokens ?? 0) / 1000).toFixed(1)}k вх. ·{" "}
-                {((usage?.totalOutputTokens ?? 0) / 1000).toFixed(1)}k исх.
+                {formatTokens(usage?.totalInputTokens ?? 0)} вх. ·{" "}
+                {formatTokens(usage?.totalOutputTokens ?? 0)} исх.
               </div>
               <div className="mt-1 text-[11px] text-[var(--fg-subtle)] tabular-nums">
-                Рассуждения: {((usage?.totalThinkingTokens ?? 0) / 1000).toFixed(1)}k
+                Кеш: {(usage?.totalCacheReadTokens ?? 0) > 0 ? formatTokens(usage?.totalCacheReadTokens ?? 0) : "—"}
+                {" · "}Рассуждения: {formatTokens(usage?.totalThinkingTokens ?? 0)}
               </div>
             </div>
 
@@ -108,7 +110,7 @@ export const UsageView: React.FC<UsageViewProps> = ({
                 {usage?.measuredCount ?? 0} из {usage?.totalRequests ?? 0}
               </div>
               <div className="mt-1 text-[11px] text-[var(--fg-subtle)] tabular-nums">
-                Средняя задержка: {Math.round(usage?.avgLatencyMs ?? 0)} мс
+                Средняя задержка: {formatDuration(usage?.avgLatencyMs ?? 0)}
               </div>
             </div>
           </div>

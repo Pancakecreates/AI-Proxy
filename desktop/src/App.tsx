@@ -215,6 +215,23 @@ export function App() {
               <span className="flex items-center gap-1.5">
                 <span
                   className={`size-1.5 rounded-full ${
+                    status?.starting
+                      ? "bg-[var(--warning)] animate-pulse"
+                      : status?.running
+                        ? "bg-[var(--success)]"
+                        : "bg-[var(--border-strong)]"
+                  }`}
+                />
+                <span>Шлюз</span>
+              </span>
+              <span className="text-[var(--fg-muted)]">
+                {status?.starting ? "запуск" : status?.running ? "работает" : "остановлен"}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="flex items-center gap-1.5">
+                <span
+                  className={`size-1.5 rounded-full ${
                     status?.running && settings.enableAnthropic ? "bg-[var(--success)]" : "bg-[var(--border-strong)]"
                   }`}
                 />

@@ -223,6 +223,7 @@ export interface RequestLogEntry {
   latencyMs: number;
   inputTokens: number;
   outputTokens: number;
+  cacheReadTokens: number;
   thinkingTokens: number;
   usageSource: string;
   costUsd: number;
@@ -256,6 +257,7 @@ export interface UsageSummary {
   errorRequests: number;
   totalInputTokens: number;
   totalOutputTokens: number;
+  totalCacheReadTokens: number;
   totalThinkingTokens: number;
   totalCostUsd: number;
   totalApiEquivalentUsd: number;

@@ -41,6 +41,7 @@ struct TurnState {
     seen_tools: HashMap<String, String>,
     input_tokens: u64,
     output_tokens: u64,
+    cache_read_tokens: u64,
     measured: bool,
     sink: Option<StreamSink>,
     done_tx: Option<oneshot::Sender<Result<(), String>>>,
@@ -403,8 +404,18 @@ impl CodexBackend {
                 if let Some(total) = params.get("tokenUsage").and_then(|t| t.get("total")) {
                     let inp = total.get("inputTokens").and_then(|v| v.as_u64()).unwrap_or(0);
                     let out = total.get("outputTokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let cached = total
+                        .get("cachedInputTokens")
+                        .or_else(|| {
+                            total
+                                .get("inputTokensDetails")
+                                .and_then(|d| d.get("cachedTokens"))
+                        })
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
                     active.input_tokens = inp;
                     active.output_tokens = out;
+                    active.cache_read_tokens = cached;
                     active.measured = true;
                     if let Some(s) = &active.sink {
                         let _ = s.send(StreamEvent::Usage {
@@ -782,6 +793,7 @@ impl CodexBackend {
                 seen_tools: HashMap::new(),
                 input_tokens: 0,
                 output_tokens: 0,
+                cache_read_tokens: 0,
                 measured: false,
                 sink,
                 done_tx: Some(done_tx),
@@ -891,6 +903,7 @@ impl CodexBackend {
                     usage: TurnUsage {
                         input_tokens: st.input_tokens,
                         output_tokens: st.output_tokens,
+                        cache_read_tokens: st.cache_read_tokens,
                         thinking_tokens,
                         measured: st.measured,
                     },
