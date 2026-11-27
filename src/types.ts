@@ -1,8 +1,19 @@
 export type DevinMode = "bypass" | "accept-edits" | "smart" | "ask" | "plan";
 export type ThoughtLevel = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+export type ThoughtConfigId = "thought_level" | "effort" | "reasoning_effort";
 export type SpeedMode = "standard" | "fast" | "ultrafast";
 export type ShowToolsMode = "thinking" | "text" | "none";
 export type ProcessModel = "in-process" | "daemon";
+export type BackendKind = "devin" | "antigravity" | "opencode" | "grok" | "codex";
+export type OpenCodeFilterMode = "go-free" | "all" | "custom";
+
+export interface AntigravityAccountConfig {
+  id: string;
+  label: string;
+  geminiDir: string;
+  appDataDir: string;
+  email?: string;
+}
 
 export interface ProxyConfig {
   help: boolean;
@@ -25,12 +36,20 @@ export interface ProxyConfig {
   idleSessionTtlMs: number;
   maxSessions: number;
   debug: boolean;
-  /** Path to the antigravity CLI executable (optional; enables Gemini backend). */
+  enableDevin?: boolean;
+  enableAntigravity?: boolean;
   antigravityPath?: string;
-  /** Path to the Gemini credentials directory (--gemini-dir flag). */
   antigravityGeminiDir?: string;
-  /** Path to the antigravity ACP app-data directory (--app-data-dir flag). */
   antigravityAppDataDir?: string;
+  antigravityAccounts?: AntigravityAccountConfig[];
+  enableOpencode?: boolean;
+  opencodePath?: string;
+  opencodeFilter?: OpenCodeFilterMode;
+  opencodeProviders?: string[];
+  enableGrok?: boolean;
+  grokPath?: string;
+  enableCodex?: boolean;
+  codexPath?: string;
 }
 
 export interface AcpJsonRpcError {
@@ -69,15 +88,32 @@ export interface AcpConfigOption {
   options?: Array<AcpConfigSelectOption | AcpConfigGroupOption>;
 }
 
+export interface AcpAuthMethod {
+  id: string;
+  name?: string;
+  description?: string;
+}
+
 export interface AcpInitializeResult {
   protocolVersion?: number;
   agentCapabilities?: Record<string, unknown>;
   agentInfo?: { name?: string; title?: string; version?: string };
+  authMethods?: AcpAuthMethod[];
+}
+
+export interface AcpAvailableModelFallback {
+  modelId: string;
+  name?: string;
+  description?: string;
 }
 
 export interface AcpSessionNewResult {
   sessionId: string;
   configOptions?: AcpConfigOption[];
+  models?: {
+    currentModelId?: string;
+    availableModels?: AcpAvailableModelFallback[];
+  };
 }
 
 export interface AcpSetConfigResult {
@@ -129,15 +165,26 @@ export interface DevinModelEntry {
   id: string;
   name: string;
   supportsImages: boolean;
+  description?: string;
+}
+
+export interface BackendModelEntry extends DevinModelEntry {
+  backendKey: string;
+  backendKind: BackendKind;
+  backendLabel: string;
+  nativeId: string;
+  qualifiedId: string;
 }
 
 export interface ConfigCatalog {
   models: DevinModelEntry[];
-  modes: DevinMode[];
+  modes: string[];
   thoughtLevels: ThoughtLevel[];
+  thoughtConfigId: ThoughtConfigId | null;
+  thoughtWireValues: Partial<Record<ThoughtLevel, string>>;
   speeds: SpeedMode[];
   currentModel: string | null;
-  currentMode: DevinMode | null;
+  currentMode: string | null;
   currentThoughtLevel: ThoughtLevel | null;
   currentSpeed: SpeedMode | null;
 }
@@ -149,6 +196,7 @@ export interface AnthropicModelInfo {
   id: string;
   display_name: string;
   description?: string;
+  max_effort_level?: "low" | "medium" | "high" | "xhigh" | "max";
   created_at: string;
   max_input_tokens: number;
   max_tokens: number;
@@ -221,4 +269,41 @@ export interface TurnResult {
   stopReason: "end_turn" | "max_tokens" | "refusal";
   usage: TurnUsage;
   assistantText: string;
+}
+
+export interface RunTurnCallbacks {
+  cwd?: string;
+  signal?: AbortSignal;
+  onThinking?: (chunk: string) => void;
+  onText?: (chunk: string) => void;
+  onUsage?: (usage: TurnUsage) => void;
+}
+
+export interface BackendHealthStatus {
+  key: string;
+  kind: BackendKind;
+  label: string;
+  ready: boolean;
+  modelsCount: number;
+  activeSessions: number;
+  error?: string;
+}
+
+export interface ProxyBackend {
+  readonly key: string;
+  readonly kind: BackendKind;
+  readonly label: string;
+  readonly isReady: boolean;
+  readonly activeSessionCount: number;
+  warmUp(force?: boolean): Promise<DevinModelEntry[]>;
+  listModels(): BackendModelEntry[];
+  runTurn(
+    nativeModelId: string,
+    request: AnthropicMessagesRequest,
+    callbacks: RunTurnCallbacks,
+    hints?: { requestedEffort?: ThoughtLevel | null; requestedSpeed?: SpeedMode | null },
+  ): Promise<TurnResult>;
+  getStatus(): BackendHealthStatus;
+  closeAll(): Promise<void>;
+  shutdown(): Promise<void>;
 }

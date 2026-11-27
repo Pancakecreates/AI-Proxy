@@ -457,3 +457,359 @@ test("end-to-end Anthropic server over fake ACP handles per-model efforts, outpu
     rmSync(fixture.dir, { recursive: true, force: true });
   }
 });
+
+import { CodexBackend } from "../src/codex-client.js";
+import { filterOpencodeModels, isFreeOpencodeModel } from "../src/models.js";
+import { BackendRouter } from "../src/router.js";
+import { AcpProxyBackend } from "../src/sessions.js";
+
+function createFakeCodexScript(dir: string): string {
+  const scriptPath = join(dir, "fake-codex.mjs");
+  const script = `
+import { createInterface } from "node:readline";
+const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
+let nextThread = 1;
+let nextTurn = 1;
+function send(obj) {
+  process.stdout.write(JSON.stringify(obj) + "\\n");
+}
+rl.on("line", (line) => {
+  if (!line.trim()) return;
+  const msg = JSON.parse(line);
+  if (msg.method === "initialize") {
+    send({ jsonrpc: "2.0", id: msg.id, result: { userAgent: "fake-codex" } });
+    return;
+  }
+  if (msg.method === "model/list") {
+    send({
+      jsonrpc: "2.0",
+      id: msg.id,
+      result: {
+        data: [
+          {
+            id: "gpt-6-luna",
+            model: "gpt-6-luna",
+            displayName: "GPT-6 Luna",
+            defaultReasoningEffort: "medium",
+            supportedReasoningEfforts: [
+              { reasoningEffort: "low" },
+              { reasoningEffort: "medium" },
+              { reasoningEffort: "high" },
+              { reasoningEffort: "xhigh" }
+            ],
+            inputModalities: ["text", "image"]
+          }
+        ]
+      }
+    });
+    return;
+  }
+  if (msg.method === "thread/start") {
+    const tid = "thr-" + nextThread++;
+    send({ jsonrpc: "2.0", id: msg.id, result: { thread: { id: tid }, model: msg.params.model } });
+    return;
+  }
+  if (msg.method === "turn/start") {
+    const tid = msg.params.threadId;
+    const turnId = "turn-" + nextTurn++;
+    send({ jsonrpc: "2.0", id: msg.id, result: { turn: { id: turnId, status: "inProgress", items: [], error: null } } });
+    send({ jsonrpc: "2.0", method: "turn/started", params: { threadId: tid, turn: { id: turnId, status: "inProgress" } } });
+    send({ jsonrpc: "2.0", method: "item/reasoning/summaryTextDelta", params: { threadId: tid, turnId, itemId: "r1", delta: "Codex thinking..." } });
+    const promptText = (msg.params.input || []).map((b) => b.text || "[img]").join(" ");
+    send({ jsonrpc: "2.0", method: "item/agentMessage/delta", params: { threadId: tid, turnId, itemId: "m1", delta: tid + ":" + msg.params.model + ":effort=" + (msg.params.effort || "none") + ":" + promptText } });
+    send({ jsonrpc: "2.0", method: "thread/tokenUsage/updated", params: { threadId: tid, turnId, tokenUsage: { total: { inputTokens: 15, outputTokens: 9 } } } });
+    send({ jsonrpc: "2.0", method: "turn/completed", params: { threadId: tid, turn: { id: turnId, status: "completed", error: null } } });
+    return;
+  }
+  if (msg.id !== undefined) {
+    send({ jsonrpc: "2.0", id: msg.id, result: {} });
+  }
+});
+`;
+  writeFileSync(scriptPath, script, "utf8");
+  return scriptPath;
+}
+
+function createFakeProviderAcpScript(dir: string, filename: string, opts: {
+  requireAuth?: string;
+  thoughtId: string;
+  thoughtValues: string[];
+  models: Array<{ value: string; name: string }>;
+  tag: string;
+}): string {
+  const scriptPath = join(dir, filename);
+  const script = `
+import { createInterface } from "node:readline";
+const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
+let authed = ${opts.requireAuth ? "false" : "true"};
+let nextSess = 1;
+const sessions = new Map();
+const MODELS = ${JSON.stringify(opts.models)};
+const THOUGHT_ID = ${JSON.stringify(opts.thoughtId)};
+const THOUGHT_VALUES = ${JSON.stringify(opts.thoughtValues)};
+function send(obj) { process.stdout.write(JSON.stringify(obj) + "\\n"); }
+rl.on("line", (line) => {
+  if (!line.trim()) return;
+  const msg = JSON.parse(line);
+  if (msg.method === "initialize") {
+    send({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: 1, authMethods: ${opts.requireAuth ? JSON.stringify([{ id: opts.requireAuth }]) : "[]"} } });
+    return;
+  }
+  if (msg.method === "authenticate") {
+    if (msg.params?.methodId === ${JSON.stringify(opts.requireAuth ?? "")}) authed = true;
+    send({ jsonrpc: "2.0", id: msg.id, result: {} });
+    return;
+  }
+  if (msg.method === "session/new") {
+    if (!authed) { send({ jsonrpc: "2.0", id: msg.id, error: { code: -32000, message: "Auth required" } }); return; }
+    const sid = ${JSON.stringify(opts.tag)} + "-s" + nextSess++;
+    const state = { model: MODELS[0].value, thought: THOUGHT_VALUES[0] };
+    sessions.set(sid, state);
+    send({
+      jsonrpc: "2.0",
+      id: msg.id,
+      result: {
+        sessionId: sid,
+        configOptions: [
+          { id: "model", category: "model", type: "select", currentValue: state.model, options: MODELS },
+          { id: THOUGHT_ID, category: "thought_level", type: "select", currentValue: state.thought, options: THOUGHT_VALUES.map(v => ({ value: v, name: v })) }
+        ]
+      }
+    });
+    return;
+  }
+  if (msg.method === "session/set_config_option") {
+    const st = sessions.get(msg.params.sessionId);
+    if (st) {
+      if (msg.params.configId === "model") st.model = msg.params.value;
+      if (msg.params.configId === THOUGHT_ID) st.thought = msg.params.value;
+    }
+    send({ jsonrpc: "2.0", id: msg.id, result: {} });
+    return;
+  }
+  if (msg.method === "session/prompt") {
+    const sid = msg.params.sessionId;
+    const st = sessions.get(sid);
+    const text = (msg.params.prompt || []).map(b => b.text || "").join(" ");
+    send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: sid, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: ${JSON.stringify(opts.tag)} + ":" + st.model + ":" + THOUGHT_ID + "=" + st.thought + ":" + text } } } });
+    send({ jsonrpc: "2.0", id: msg.id, result: { stopReason: "end_turn", usage: { inputTokens: 8, outputTokens: 4 } } });
+    return;
+  }
+  if (msg.id !== undefined) send({ jsonrpc: "2.0", id: msg.id, result: {} });
+});
+`;
+  writeFileSync(scriptPath, script, "utf8");
+  return scriptPath;
+}
+
+test("OpenCode Go + free model filtering matches OpenCode Go and free models only", () => {
+  const sample = [
+    { id: "opencode-go/kimi-k3.1-pro", name: "opencode-go/Kimi K3.1 Pro", supportsImages: true },
+    { id: "opencode/beam-free", name: "opencode/Beam Free", supportsImages: true },
+    { id: "opencode/big-pickle", name: "opencode/Big Pickle", supportsImages: true },
+    { id: "opencode/claude-opus-4-6", name: "opencode/Claude Opus 4.6", supportsImages: true },
+    { id: "openai/gpt-5.4", name: "openai/GPT-5.4", supportsImages: true },
+  ];
+  assert.equal(isFreeOpencodeModel("opencode/big-pickle", "opencode/Big Pickle"), true);
+  assert.equal(isFreeOpencodeModel("opencode/beam-free", "opencode/Beam Free"), true);
+  assert.equal(isFreeOpencodeModel("opencode/claude-opus-4-6", "opencode/Claude Opus 4.6"), false);
+
+  const goFree = filterOpencodeModels(sample, "go-free");
+  assert.deepEqual(
+    goFree.map((m) => m.id),
+    ["opencode-go/kimi-k3.1-pro", "opencode/beam-free", "opencode/big-pickle"],
+  );
+
+  const custom = filterOpencodeModels(sample, "custom", ["openai"]);
+  assert.deepEqual(
+    custom.map((m) => m.id),
+    ["openai/gpt-5.4"],
+  );
+});
+
+test("Multi-backend router routes across Antigravity accounts, OpenCode Go/Free, Grok ACP, and Codex app-server", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "multi-proxy-test-"));
+  const agy1Script = createFakeProviderAcpScript(dir, "fake-agy1.mjs", {
+    thoughtId: "thought_level",
+    thoughtValues: ["low", "medium", "high", "xhigh"],
+    models: [{ value: "gemini-4-hydrogen", name: "Gemini 4 Hydrogen" }],
+    tag: "agy1",
+  });
+  const agy2Script = createFakeProviderAcpScript(dir, "fake-agy2.mjs", {
+    thoughtId: "thought_level",
+    thoughtValues: ["low", "medium", "high", "xhigh"],
+    models: [{ value: "gemini-4-hydrogen", name: "Gemini 4 Hydrogen" }],
+    tag: "agy2",
+  });
+  const ocScript = createFakeProviderAcpScript(dir, "fake-oc.mjs", {
+    thoughtId: "effort",
+    thoughtValues: ["low", "medium", "high", "extra", "max"],
+    models: [
+      { value: "opencode-go/kimi-k3.1-pro", name: "opencode-go/Kimi K3.1 Pro" },
+      { value: "opencode/beam-free", name: "opencode/Beam Free" },
+      { value: "openai/gpt-paid", name: "openai/GPT Paid" },
+    ],
+    tag: "oc",
+  });
+  const grokScript = createFakeProviderAcpScript(dir, "fake-grok.mjs", {
+    requireAuth: "cached_token",
+    thoughtId: "reasoning_effort",
+    thoughtValues: ["low", "medium", "high", "xhigh"],
+    models: [{ value: "grok-4.7", name: "Grok 4.7" }],
+    tag: "grok",
+  });
+  const codexScript = createFakeCodexScript(dir);
+
+  const config: ProxyConfig = {
+    help: false,
+    host: "127.0.0.1",
+    port: 0,
+    devinPath: process.execPath,
+    cwd: dir,
+    mode: "bypass",
+    defaultModel: "gemini-4-hydrogen",
+    thoughtLevel: null,
+    speed: null,
+    showTools: "thinking",
+    processModel: "in-process",
+    apiKey: null,
+    modelMap: {},
+    gatewayAliases: true,
+    requestTimeoutMs: 10_000,
+    startupTimeoutMs: 10_000,
+    idleSessionTtlMs: 60_000,
+    maxSessions: 4,
+    debug: false,
+  };
+
+  const agy1Acp = new AcpClient(config, { label: "Antigravity (Acc1)", executable: process.execPath, args: [agy1Script], supportsCloseSession: false });
+  const agy2Acp = new AcpClient(config, { label: "Antigravity (Acc2)", executable: process.execPath, args: [agy2Script], supportsCloseSession: false });
+  const ocAcp = new AcpClient(config, { label: "OpenCode", executable: process.execPath, args: [ocScript], supportsCloseSession: false });
+  const grokAcp = new AcpClient(config, { label: "Grok", executable: process.execPath, args: [grokScript], authMethodIds: ["cached_token"], supportsCloseSession: false });
+
+  const router = new BackendRouter(
+    [
+      new AcpProxyBackend({
+        key: "antigravity:acc1",
+        kind: "antigravity",
+        label: "Antigravity 1 (acc1@gmail.com)",
+        acp: agy1Acp,
+        sessions: new SessionManager(agy1Acp, config, { backendKind: "antigravity", backendLabel: "Antigravity 1" }),
+        qualifiedPrefix: "agy-acc1.",
+        formatDisplayName: (m) => m.name,
+        formatDescription: (m) => `Antigravity 1: ${m.id}`,
+      }),
+      new AcpProxyBackend({
+        key: "antigravity:acc2",
+        kind: "antigravity",
+        label: "Antigravity 2 (acc2@gmail.com)",
+        acp: agy2Acp,
+        sessions: new SessionManager(agy2Acp, config, { backendKind: "antigravity", backendLabel: "Antigravity 2" }),
+        qualifiedPrefix: "agy-acc2.",
+        formatDisplayName: (m) => m.name,
+        formatDescription: (m) => `Antigravity 2: ${m.id}`,
+      }),
+      new AcpProxyBackend({
+        key: "opencode",
+        kind: "opencode",
+        label: "OpenCode",
+        acp: ocAcp,
+        sessions: new SessionManager(ocAcp, config, {
+          backendKind: "opencode",
+          backendLabel: "OpenCode",
+          filterModels: (models) => filterOpencodeModels(models, "go-free"),
+        }),
+        qualifiedPrefix: "oc.",
+        formatQualifiedId: (m) =>
+          m.id.startsWith("opencode-go/")
+            ? `oc-go.${m.id.slice("opencode-go/".length)}`
+            : `oc-free.${m.id.replace(/^opencode\//, "")}`,
+        formatDisplayName: (m) => m.name.replace(/^(?:opencode-go|opencode)\//i, ""),
+        formatDescription: (m) =>
+          m.id.startsWith("opencode-go/")
+            ? `OpenCode Go: ${m.id.slice("opencode-go/".length)}`
+            : `OpenCode: ${m.id.replace(/^opencode\//i, "")}`,
+      }),
+      new AcpProxyBackend({
+        key: "grok",
+        kind: "grok",
+        label: "Grok",
+        acp: grokAcp,
+        sessions: new SessionManager(grokAcp, config, { backendKind: "grok", backendLabel: "Grok" }),
+        qualifiedPrefix: "grok.",
+        formatDisplayName: (m) => m.name,
+        formatDescription: (m) => `Grok: ${m.id}`,
+      }),
+      new CodexBackend(config, { executable: process.execPath, args: [codexScript], label: "Codex" }),
+    ],
+    config,
+  );
+
+  const server = createProxyServer({ config, router });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as AddressInfo;
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  try {
+    const modelsRes = await fetch(`${baseUrl}/v1/models`);
+    assert.equal(modelsRes.status, 200);
+    const modelsJson = (await modelsRes.json()) as AnthropicModelsListResponse;
+    // 1 agy1 + 1 agy2 + 2 opencode (go + free; paid filtered out!) + 1 grok + 1 codex = 6
+    assert.equal(modelsJson.data.length, 6);
+    for (const m of modelsJson.data) {
+      assert.equal(isClaudeDesktopCompatibleId(m.id), true);
+      assert.equal(m.id.includes("-h-"), false, `Expected readable gateway ID, got ${m.id}`);
+      assert.equal(m.max_effort_level, "max");
+      assert.ok(m.description);
+    }
+    assert.equal(new Set(modelsJson.data.map((m) => m.display_name)).size, modelsJson.data.length);
+
+    const agy2Model = modelsJson.data.find((m) => m.description === "Antigravity 2: gemini-4-hydrogen");
+    const ocGoModel = modelsJson.data.find((m) => m.description === "OpenCode Go: kimi-k3.1-pro");
+    const ocFreeModel = modelsJson.data.find((m) => m.description === "OpenCode: beam-free");
+    const grokModel = modelsJson.data.find((m) => m.description === "Grok: grok-4.7");
+    const codexModel = modelsJson.data.find((m) => m.description === "ChatGPT: gpt-6-luna");
+    assert.ok(agy2Model && ocGoModel && ocFreeModel && grokModel && codexModel);
+
+    // Antigravity Account 2
+    const agy2Res = await fetch(`${baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: agy2Model.id, output_config: { effort: "high" }, messages: [{ role: "user", content: "ping agy2" }] }),
+    });
+    const agy2Json = (await agy2Res.json()) as { content: Array<{ text?: string }> };
+    assert.match(agy2Json.content[0]?.text ?? "", /^agy2:gemini-4-hydrogen:thought_level=high:ping agy2$/);
+
+    // OpenCode Go with xhigh -> wire value "extra"
+    const ocRes = await fetch(`${baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: ocGoModel.id, output_config: { effort: "xhigh" }, messages: [{ role: "user", content: "ping oc" }] }),
+    });
+    const ocJson = (await ocRes.json()) as { content: Array<{ text?: string }> };
+    assert.match(ocJson.content[0]?.text ?? "", /^oc:opencode-go\/kimi-k3\.1-pro:effort=extra:ping oc$/);
+
+    // Grok ACP with reasoning_effort
+    const grokRes = await fetch(`${baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: grokModel.id, output_config: { effort: "xhigh" }, messages: [{ role: "user", content: "ping grok" }] }),
+    });
+    const grokJson = (await grokRes.json()) as { content: Array<{ text?: string }> };
+    assert.match(grokJson.content[0]?.text ?? "", /^grok:grok-4\.7:reasoning_effort=xhigh:ping grok$/);
+
+    // Codex app-server
+    const codexRes = await fetch(`${baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: codexModel.id, output_config: { effort: "high" }, messages: [{ role: "user", content: "ping codex" }] }),
+    });
+    const codexJson = (await codexRes.json()) as { content: Array<{ type: string; text?: string; thinking?: string }> };
+    assert.equal(codexJson.content.find((c) => c.type === "thinking")?.thinking, "Codex thinking...");
+    assert.match(codexJson.content.find((c) => c.type === "text")?.text ?? "", /^thr-1:gpt-6-luna:effort=high:ping codex$/);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await router.shutdown();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

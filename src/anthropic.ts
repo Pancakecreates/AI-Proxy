@@ -1,8 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { AcpRpcError } from "./acp-client.js";
-import { extractSystemText, normalizeMessageContent, type SessionManager } from "./sessions.js";
-import type { AnthropicMessagesRequest, TurnUsage } from "./types.js";
+import { extractSystemText, normalizeMessageContent } from "./sessions.js";
+import type { AnthropicMessagesRequest, RunTurnCallbacks, TurnResult, TurnUsage } from "./types.js";
+
+export interface TurnRunner {
+  runTurn(request: AnthropicMessagesRequest, callbacks: RunTurnCallbacks): Promise<TurnResult>;
+}
 
 const KEEPALIVE_INTERVAL_MS = 15_000;
 
@@ -66,7 +70,7 @@ export async function handleMessagesRequest(
   req: IncomingMessage,
   res: ServerResponse,
   body: AnthropicMessagesRequest,
-  context: { sessions: SessionManager; cwd: string; allowThinking?: boolean },
+  context: { sessions: TurnRunner; cwd: string; allowThinking?: boolean },
 ): Promise<void> {
   const { sessions, cwd, allowThinking = true } = context;
 

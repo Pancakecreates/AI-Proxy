@@ -2,20 +2,29 @@ import { createHash } from "node:crypto";
 import { type AcpClient, AcpRpcError } from "./acp-client.js";
 import { parseConfigCatalog, resolveDevinModelWithHints, resolveSpeed, resolveThoughtLevel } from "./models.js";
 import type {
+  AcpAvailableModelFallback,
   AcpConfigOption,
   AcpContentBlock,
   AcpSessionUpdate,
   AnthropicContentBlock,
   AnthropicMessageParam,
   AnthropicMessagesRequest,
+  BackendHealthStatus,
+  BackendKind,
+  BackendModelEntry,
   ConfigCatalog,
   DevinMode,
+  DevinModelEntry,
+  ProxyBackend,
   ProxyConfig,
+  RunTurnCallbacks,
   SpeedMode,
+  ThoughtConfigId,
   ThoughtLevel,
   TurnResult,
-  TurnUsage,
 } from "./types.js";
+
+export type { RunTurnCallbacks };
 
 interface NormalizedContent {
   text: string;
@@ -28,9 +37,12 @@ interface SessionRecord {
   systemHash: string;
   fingerprints: string[];
   model: string | null;
-  mode: DevinMode | null;
+  mode: string | null;
   thoughtLevel: ThoughtLevel | null;
+  thoughtConfigId: ThoughtConfigId | null;
+  thoughtWireValues: Partial<Record<ThoughtLevel, string>>;
   speed: SpeedMode | null;
+  supportedModes: string[];
   supportedThoughtLevels: ThoughtLevel[];
   supportedSpeeds: SpeedMode[];
   busy: boolean;
@@ -43,12 +55,10 @@ interface SeenToolState {
   announcedStart?: boolean;
 }
 
-export interface RunTurnCallbacks {
-  cwd?: string;
-  signal?: AbortSignal;
-  onThinking?: (chunk: string) => void;
-  onText?: (chunk: string) => void;
-  onUsage?: (usage: TurnUsage) => void;
+export interface SessionManagerOptions {
+  backendKind?: BackendKind;
+  backendLabel?: string;
+  filterModels?: (models: readonly DevinModelEntry[]) => DevinModelEntry[];
 }
 
 export function extractSystemText(system: AnthropicMessagesRequest["system"]): string {
@@ -108,7 +118,7 @@ function safeJson(value: unknown): string {
   }
 }
 
-function messageFingerprint(msg: Pick<AnthropicMessageParam, "role" | "content">): string {
+export function messageFingerprint(msg: Pick<AnthropicMessageParam, "role" | "content">): string {
   const norm = normalizeMessageContent(msg.content);
   const imgDigest = norm.images.map((img) => `${img.mimeType}:${img.data.length}`).join(",");
   return createHash("sha256")
@@ -116,7 +126,7 @@ function messageFingerprint(msg: Pick<AnthropicMessageParam, "role" | "content">
     .digest("hex");
 }
 
-function hashSystem(text: string): string {
+export function hashSystem(text: string): string {
   return createHash("sha256").update(text).digest("hex");
 }
 
@@ -174,20 +184,50 @@ function buildPromptBlocks(params: {
   return blocks;
 }
 
+function mapModeForBackend(
+  backendKind: BackendKind,
+  requested: DevinMode,
+  supportedModes: readonly string[],
+): string | null {
+  if (supportedModes.length === 0) return null;
+  if (supportedModes.includes(requested)) return requested;
+
+  if (backendKind === "antigravity") {
+    const mapped =
+      requested === "bypass" || requested === "smart"
+        ? "auto"
+        : requested === "ask"
+          ? "default"
+          : requested;
+    if (supportedModes.includes(mapped)) return mapped;
+  } else if (backendKind === "opencode") {
+    const mapped = requested === "plan" ? "plan" : "build";
+    if (supportedModes.includes(mapped)) return mapped;
+  }
+
+  return null;
+}
+
 /**
  * Manages ACP session lifecycle, model catalog cache, prefix matching, and turn execution.
  */
 export class SessionManager {
   readonly #acp: AcpClient;
   readonly #config: ProxyConfig;
+  readonly #backendKind: BackendKind;
+  readonly #backendLabel: string;
+  readonly #filterModels: ((models: readonly DevinModelEntry[]) => DevinModelEntry[]) | undefined;
   #catalog: ConfigCatalog = parseConfigCatalog([]);
   readonly #sessions = new Map<string, SessionRecord>();
   #warmupPromise: Promise<ConfigCatalog> | null = null;
   readonly #toolStates = new Map<string, Map<string, SeenToolState>>();
 
-  constructor(acp: AcpClient, config: ProxyConfig) {
+  constructor(acp: AcpClient, config: ProxyConfig, options: SessionManagerOptions = {}) {
     this.#acp = acp;
     this.#config = config;
+    this.#backendKind = options.backendKind ?? "devin";
+    this.#backendLabel = options.backendLabel ?? acp.label;
+    this.#filterModels = options.filterModels;
     this.#acp.on("exit", () => {
       this.#sessions.clear();
     });
@@ -206,11 +246,26 @@ export class SessionManager {
     if (this.#warmupPromise) return this.#warmupPromise;
 
     this.#warmupPromise = (async () => {
-      const created = await this.#acp.newSession({ cwd: this.#config.cwd });
-      this.#updateCatalog(created.configOptions);
+      let created = await this.#acp.newSession({ cwd: this.#config.cwd });
+      this.#updateCatalog(created.configOptions, created.models?.availableModels);
       if (created.sessionId) {
         await this.#acp.closeSession(created.sessionId);
       }
+
+      // OpenCode can return only partial/built-in models on very first cold session/new
+      // while background provider catalogs (like opencode-go) finish loading.
+      if (
+        this.#backendKind === "opencode" &&
+        !this.#catalog.models.some((m) => m.id.toLowerCase().startsWith("opencode-go/"))
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 1_500));
+        created = await this.#acp.newSession({ cwd: this.#config.cwd });
+        this.#updateCatalog(created.configOptions, created.models?.availableModels);
+        if (created.sessionId) {
+          await this.#acp.closeSession(created.sessionId);
+        }
+      }
+
       return this.#catalog;
     })().finally(() => {
       this.#warmupPromise = null;
@@ -219,19 +274,34 @@ export class SessionManager {
     return this.#warmupPromise;
   }
 
-  #updateCatalog(configOptions: readonly AcpConfigOption[] | undefined): void {
-    const parsed = parseConfigCatalog(configOptions);
+  #updateCatalog(
+    configOptions: readonly AcpConfigOption[] | undefined,
+    fallbackModels?: readonly AcpAvailableModelFallback[],
+  ): void {
+    const parsed = parseConfigCatalog(configOptions, fallbackModels);
     if (parsed.models.length > 0) {
+      if (this.#filterModels) {
+        parsed.models = this.#filterModels(parsed.models);
+      }
       this.#catalog = parsed;
     }
   }
 
-  #applySessionConfigSnapshot(session: SessionRecord, configOptions: readonly AcpConfigOption[] | undefined): void {
+  #applySessionConfigSnapshot(
+    session: SessionRecord,
+    configOptions: readonly AcpConfigOption[] | undefined,
+    fallbackModels?: readonly AcpAvailableModelFallback[],
+  ): void {
     if (!Array.isArray(configOptions) || configOptions.length === 0) return;
-    this.#updateCatalog(configOptions);
-    const parsed = parseConfigCatalog(configOptions);
+    this.#updateCatalog(configOptions, fallbackModels);
+    const parsed = parseConfigCatalog(configOptions, fallbackModels);
     if (parsed.currentMode) session.mode = parsed.currentMode;
+    if (parsed.modes.length > 0) session.supportedModes = parsed.modes;
     if (parsed.currentModel) session.model = parsed.currentModel;
+    if (parsed.thoughtConfigId) session.thoughtConfigId = parsed.thoughtConfigId;
+    if (Object.keys(parsed.thoughtWireValues).length > 0) {
+      session.thoughtWireValues = { ...session.thoughtWireValues, ...parsed.thoughtWireValues };
+    }
     if (parsed.currentThoughtLevel) session.thoughtLevel = parsed.currentThoughtLevel;
     if (parsed.currentSpeed) session.speed = parsed.currentSpeed;
     if (parsed.thoughtLevels.length > 0) session.supportedThoughtLevels = parsed.thoughtLevels;
@@ -291,17 +361,20 @@ export class SessionManager {
   async #createSession(cwd: string): Promise<SessionRecord> {
     await this.#evictIfNeeded();
     const created = await this.#acp.newSession({ cwd });
-    this.#updateCatalog(created.configOptions);
-    const localCatalog = parseConfigCatalog(created.configOptions);
+    this.#updateCatalog(created.configOptions, created.models?.availableModels);
+    const localCatalog = parseConfigCatalog(created.configOptions, created.models?.availableModels);
     const record: SessionRecord = {
       id: created.sessionId,
       cwd,
       systemHash: "",
       fingerprints: [],
-      model: localCatalog.currentModel,
+      model: localCatalog.currentModel ?? created.models?.currentModelId ?? null,
       mode: localCatalog.currentMode,
       thoughtLevel: localCatalog.currentThoughtLevel,
+      thoughtConfigId: localCatalog.thoughtConfigId,
+      thoughtWireValues: localCatalog.thoughtWireValues,
       speed: localCatalog.currentSpeed,
+      supportedModes: localCatalog.modes,
       supportedThoughtLevels: localCatalog.thoughtLevels,
       supportedSpeeds: localCatalog.speeds,
       busy: false,
@@ -316,10 +389,12 @@ export class SessionManager {
     request: AnthropicMessagesRequest,
     selection: { targetModel: string; requestedEffort: ThoughtLevel | null; requestedSpeed: SpeedMode | null },
   ): Promise<void> {
-    if (this.#config.mode && session.mode !== this.#config.mode) {
-      const updated = await this.#acp.setConfigOption(session.id, "mode", this.#config.mode);
+    const supportedModes = session.supportedModes.length > 0 ? session.supportedModes : this.#catalog.modes;
+    const targetMode = mapModeForBackend(this.#backendKind, this.#config.mode, supportedModes);
+    if (targetMode && session.mode !== targetMode) {
+      const updated = await this.#acp.setConfigOption(session.id, "mode", targetMode);
       this.#applySessionConfigSnapshot(session, updated.configOptions);
-      session.mode = this.#config.mode;
+      session.mode = targetMode;
     }
 
     if (selection.targetModel && session.model !== selection.targetModel) {
@@ -328,6 +403,7 @@ export class SessionManager {
       session.model = selection.targetModel;
     }
 
+    const thoughtConfigId = session.thoughtConfigId ?? this.#catalog.thoughtConfigId;
     const supportedEfforts =
       session.supportedThoughtLevels.length > 0 ? session.supportedThoughtLevels : this.#catalog.thoughtLevels;
     const targetEffort = resolveThoughtLevel(
@@ -339,8 +415,10 @@ export class SessionManager {
       },
       supportedEfforts,
     );
-    if (targetEffort && session.thoughtLevel !== targetEffort) {
-      const updated = await this.#acp.setConfigOption(session.id, "thought_level", targetEffort);
+    if (thoughtConfigId && targetEffort && session.thoughtLevel !== targetEffort) {
+      const wireValue =
+        session.thoughtWireValues[targetEffort] ?? this.#catalog.thoughtWireValues[targetEffort] ?? targetEffort;
+      const updated = await this.#acp.setConfigOption(session.id, thoughtConfigId, wireValue);
       this.#applySessionConfigSnapshot(session, updated.configOptions);
       session.thoughtLevel = targetEffort;
     }
@@ -356,7 +434,11 @@ export class SessionManager {
   /**
    * Execute an Anthropic /v1/messages turn through an ACP session and forward streaming events.
    */
-  async runTurn(request: AnthropicMessagesRequest, callbacks: RunTurnCallbacks): Promise<TurnResult> {
+  async runTurn(
+    request: AnthropicMessagesRequest,
+    callbacks: RunTurnCallbacks,
+    explicitSelection?: { model: DevinModelEntry; requestedEffort: ThoughtLevel | null; requestedSpeed: SpeedMode | null },
+  ): Promise<TurnResult> {
     if (this.#catalog.models.length === 0) {
       await this.warmUp();
     }
@@ -368,10 +450,12 @@ export class SessionManager {
     const messages = Array.isArray(request.messages) ? request.messages : [];
     const fingerprints = messages.map(messageFingerprint);
 
-    const selection = resolveDevinModelWithHints(request.model, this.#catalog.models, {
-      defaultModel: this.#config.defaultModel,
-      modelMap: this.#config.modelMap,
-    });
+    const selection =
+      explicitSelection ??
+      resolveDevinModelWithHints(request.model, this.#catalog.models, {
+        defaultModel: this.#config.defaultModel,
+        modelMap: this.#config.modelMap,
+      });
 
     let session = this.#findMatchingSession({ cwd, systemHash, fingerprints });
     let isFreshSession = false;
@@ -489,7 +573,7 @@ export class SessionManager {
       }
     }
 
-    throw new Error("Failed to establish Devin ACP session.");
+    throw new Error(`Failed to establish ${this.#backendLabel} ACP session.`);
   }
 
   #formatToolUpdate(sessionId: string, update: AcpSessionUpdate): string {
@@ -513,10 +597,10 @@ export class SessionManager {
     if (status === "pending" || status === "in_progress") {
       if (prev?.announcedStart) return "";
       seen.set(id, { title, status, announcedStart: true });
-      return `\n[Devin tool] ${title}...\n`;
+      return `\n[${this.#backendLabel} tool] ${title}...\n`;
     }
     if (status === "completed" || status === "failed") {
-      return `\n[Devin tool ${status}] ${title}\n`;
+      return `\n[${this.#backendLabel} tool ${status}] ${title}\n`;
     }
     return "";
   }
@@ -525,6 +609,122 @@ export class SessionManager {
     const ids = [...this.#sessions.keys()];
     this.#sessions.clear();
     await Promise.all(ids.map((id) => this.#acp.closeSession(id)));
+  }
+}
+
+export interface AcpProxyBackendOptions {
+  key: string;
+  kind: BackendKind;
+  label: string;
+  acp: AcpClient;
+  sessions: SessionManager;
+  qualifiedPrefix: string;
+  formatQualifiedId?: (model: DevinModelEntry) => string;
+  formatDisplayName?: (model: DevinModelEntry) => string;
+  formatDescription?: (model: DevinModelEntry) => string;
+}
+
+/**
+ * ProxyBackend adapter wrapping an ACP client + SessionManager.
+ */
+export class AcpProxyBackend implements ProxyBackend {
+  readonly key: string;
+  readonly kind: BackendKind;
+  readonly label: string;
+  readonly #acp: AcpClient;
+  readonly #sessions: SessionManager;
+  readonly #qualifiedPrefix: string;
+  readonly #formatQualifiedId: ((model: DevinModelEntry) => string) | undefined;
+  readonly #formatDisplayName: ((model: DevinModelEntry) => string) | undefined;
+  readonly #formatDescription: ((model: DevinModelEntry) => string) | undefined;
+  #lastError: string | undefined;
+
+  constructor(options: AcpProxyBackendOptions) {
+    this.key = options.key;
+    this.kind = options.kind;
+    this.label = options.label;
+    this.#acp = options.acp;
+    this.#sessions = options.sessions;
+    this.#qualifiedPrefix = options.qualifiedPrefix;
+    this.#formatQualifiedId = options.formatQualifiedId;
+    this.#formatDisplayName = options.formatDisplayName;
+    this.#formatDescription = options.formatDescription;
+  }
+
+  get isReady(): boolean {
+    return this.#acp.isReady;
+  }
+
+  get activeSessionCount(): number {
+    return this.#sessions.activeSessionCount;
+  }
+
+  async warmUp(force = false): Promise<DevinModelEntry[]> {
+    try {
+      const catalog = await this.#sessions.warmUp(force);
+      this.#lastError = undefined;
+      return catalog.models;
+    } catch (err) {
+      this.#lastError = err instanceof Error ? err.message : String(err);
+      throw err;
+    }
+  }
+
+  listModels(): BackendModelEntry[] {
+    return this.#sessions.catalog.models.map((m) => ({
+      ...m,
+      name: this.#formatDisplayName ? this.#formatDisplayName(m) : m.name,
+      ...(this.#formatDescription ? { description: this.#formatDescription(m) } : {}),
+      backendKey: this.key,
+      backendKind: this.kind,
+      backendLabel: this.label,
+      nativeId: m.id,
+      qualifiedId: this.#formatQualifiedId
+        ? this.#formatQualifiedId(m)
+        : this.#qualifiedPrefix
+          ? `${this.#qualifiedPrefix}${m.id}`
+          : m.id,
+    }));
+  }
+
+  async runTurn(
+    nativeModelId: string,
+    request: AnthropicMessagesRequest,
+    callbacks: RunTurnCallbacks,
+    hints?: { requestedEffort?: ThoughtLevel | null; requestedSpeed?: SpeedMode | null },
+  ): Promise<TurnResult> {
+    const model =
+      this.#sessions.catalog.models.find((m) => m.id === nativeModelId) ?? {
+        id: nativeModelId,
+        name: nativeModelId,
+        supportsImages: true,
+      };
+    return this.#sessions.runTurn(request, callbacks, {
+      model,
+      requestedEffort: hints?.requestedEffort ?? null,
+      requestedSpeed: hints?.requestedSpeed ?? null,
+    });
+  }
+
+  getStatus(): BackendHealthStatus {
+    return {
+      key: this.key,
+      kind: this.kind,
+      label: this.label,
+      ready: this.isReady,
+      modelsCount: this.#sessions.catalog.models.length,
+      activeSessions: this.activeSessionCount,
+      ...(this.#lastError ? { error: this.#lastError } : {}),
+    };
+  }
+
+  async closeAll(): Promise<void> {
+    await this.#sessions.closeAll();
+  }
+
+  async shutdown(): Promise<void> {
+    await this.#sessions.closeAll();
+    await this.#acp.shutdown();
   }
 }
 

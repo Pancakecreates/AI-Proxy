@@ -1,4 +1,5 @@
 import type {
+  AcpAvailableModelFallback,
   AcpConfigGroupOption,
   AcpConfigOption,
   AcpConfigSelectOption,
@@ -7,10 +8,12 @@ import type {
   AnthropicModelsListResponse,
   AnthropicOutputConfig,
   AnthropicThinkingConfig,
+  BackendModelEntry,
   ConfigCatalog,
-  DevinMode,
   DevinModelEntry,
+  OpenCodeFilterMode,
   SpeedMode,
+  ThoughtConfigId,
   ThoughtLevel,
 } from "./types.js";
 
@@ -36,15 +39,52 @@ function normalizeTierDisplayName(name: string): string {
   }
   return name;
 }
+
 const CLAUDE_ALLOWED_KEYWORDS = ["claude", ...CLAUDE_TIER_KEYWORDS, "anthropic"] as const;
 const GATEWAY_TIER_EXACT_RE = /^(sonnet|opus|haiku|fable|mythos)(-[\d.]+)?$/;
 const NON_ANTHROPIC_BLOCKLIST_RE =
   /ark-code|astron|command-r|deepseek|doubao|gemini|gemma|glm|gpt|grok|hermes|hy3|kimi|lfm|\bling\b|llama|longcat|mimo|minimax|mistral|mixtral|moonshot|nemotron|openai|phi-|qianfan|qwen|tc-code|\bunic\b|yi-|stepfun|step-3|seed-|bytedance|hunyuan|granite|amazon\.nova|nova-|devstral|ministral|ernie|codex|arcee|trinity|abab|phi\d|\bk2\.|\bm2\.|jamba|arctic|solar|mercury|zamba|kat-coder|\bds-|dpsk/;
 
+const OPENCODE_FREE_EXACT_IDS = new Set(["opencode/big-pickle"]);
+
 export interface ResolvedModelSelection {
   model: DevinModelEntry;
   requestedEffort: ThoughtLevel | null;
   requestedSpeed: SpeedMode | null;
+}
+
+/**
+ * Check whether an OpenCode model is free (matches OpenBot's free model rules).
+ */
+export function isFreeOpencodeModel(id: string, name = ""): boolean {
+  const normId = id.trim().toLowerCase();
+  if (OPENCODE_FREE_EXACT_IDS.has(normId)) return true;
+  if (/-free$/i.test(normId)) return true;
+  return /\bfree$/i.test(name.trim());
+}
+
+/**
+ * Filter OpenCode models according to OPENCODE_FILTER (`go-free`, `all`, or `custom` prefixes).
+ */
+export function filterOpencodeModels(
+  models: readonly DevinModelEntry[],
+  mode: OpenCodeFilterMode = "go-free",
+  customProviders: readonly string[] = [],
+): DevinModelEntry[] {
+  if (mode === "all") return [...models];
+  if (mode === "custom" && customProviders.length > 0) {
+    const prefixes = customProviders.map((p) => p.trim().toLowerCase()).filter(Boolean);
+    return models.filter((m) => {
+      const lower = m.id.toLowerCase();
+      return prefixes.some((prefix) =>
+        prefix.endsWith("/") ? lower.startsWith(prefix) : lower.startsWith(`${prefix}/`) || lower === prefix,
+      );
+    });
+  }
+  return models.filter((m) => {
+    const lower = m.id.toLowerCase();
+    return lower.startsWith("opencode-go/") || (lower.startsWith("opencode/") && isFreeOpencodeModel(m.id, m.name));
+  });
 }
 
 /**
@@ -78,11 +118,11 @@ function decodeSafeHex(encoded: string): string | null {
 }
 
 /**
- * Convert a non-Anthropic Devin model ID into a lossless Claude Desktop Gateway alias.
+ * Convert a model ID into a lossless Claude Desktop Gateway alias.
  * Uses the `claude-fable-acp-` prefix so Claude Desktop admits it and enables effort controls.
  */
-export function toGatewayModelId(nativeId: string): string {
-  if (isClaudeDesktopCompatibleId(nativeId)) return nativeId;
+export function toGatewayModelId(nativeId: string, forceAlias = false): string {
+  if (!forceAlias && isClaudeDesktopCompatibleId(nativeId)) return nativeId;
 
   if (!nativeId.includes("--") && /^[a-z0-9._-]+$/.test(nativeId)) {
     let body = nativeId;
@@ -107,7 +147,7 @@ export function toGatewayModelId(nativeId: string): string {
 }
 
 /**
- * Decode a proxy-generated Claude Desktop Gateway alias back to its original Devin ID.
+ * Decode a proxy-generated Claude Desktop Gateway alias back to its original ID.
  */
 export function decodeGatewayModelId(id: string): string | null {
   const trimmed = id.trim();
@@ -120,44 +160,89 @@ export function decodeGatewayModelId(id: string): string | null {
   return body.replaceAll("--", "");
 }
 
+function isThoughtOption(option: AcpConfigOption): ThoughtConfigId | null {
+  if (option.id === "thought_level" || option.category === "thought_level") {
+    if (option.id === "effort" || option.id === "reasoning_effort" || option.id === "thought_level") {
+      return option.id;
+    }
+    return "thought_level";
+  }
+  if (option.id === "effort" || option.id === "reasoning_effort") {
+    return option.id;
+  }
+  return null;
+}
+
 /**
- * Extract structured model, mode, thought_level, and speed catalogs from ACP configOptions.
+ * Extract structured model, mode, thought_level/effort, and speed catalogs from ACP configOptions.
  */
-export function parseConfigCatalog(configOptions: readonly AcpConfigOption[] | undefined): ConfigCatalog {
+export function parseConfigCatalog(
+  configOptions: readonly AcpConfigOption[] | undefined,
+  fallbackModels?: readonly AcpAvailableModelFallback[],
+): ConfigCatalog {
   const result: ConfigCatalog = {
     models: [],
     modes: [],
     thoughtLevels: [],
+    thoughtConfigId: null,
+    thoughtWireValues: {},
     speeds: [],
     currentModel: null,
     currentMode: null,
     currentThoughtLevel: null,
     currentSpeed: null,
   };
-  if (!Array.isArray(configOptions)) return result;
-
-  for (const option of configOptions) {
-    if (!option || typeof option !== "object") continue;
-    const entries = flattenSelectOptions(option.options);
-    if (option.id === "model") {
-      result.currentModel = typeof option.currentValue === "string" ? option.currentValue : null;
-      result.models = entries.map((entry) => ({
-        id: entry.value,
-        name: normalizeTierDisplayName(entry.name || entry.value),
-        supportsImages: Boolean(entry._meta?.["cognition.ai/supportsImages"]),
-      }));
-    } else if (option.id === "mode") {
-      result.currentMode = typeof option.currentValue === "string" ? (option.currentValue as DevinMode) : null;
-      result.modes = entries.map((entry) => entry.value as DevinMode);
-    } else if (option.id === "thought_level") {
-      result.currentThoughtLevel =
-        typeof option.currentValue === "string" ? (option.currentValue as ThoughtLevel) : null;
-      result.thoughtLevels = entries.map((entry) => entry.value as ThoughtLevel);
-    } else if (option.id === "speed") {
-      result.currentSpeed = typeof option.currentValue === "string" ? (option.currentValue as SpeedMode) : null;
-      result.speeds = entries.map((entry) => entry.value as SpeedMode);
+  if (Array.isArray(configOptions)) {
+    for (const option of configOptions) {
+      if (!option || typeof option !== "object") continue;
+      const entries = flattenSelectOptions(option.options);
+      if (option.id === "model") {
+        result.currentModel = typeof option.currentValue === "string" ? option.currentValue : null;
+        result.models = entries.map((entry) => ({
+          id: entry.value,
+          name: normalizeTierDisplayName(entry.name || entry.value),
+          supportsImages:
+            entry._meta && "cognition.ai/supportsImages" in entry._meta
+              ? Boolean(entry._meta["cognition.ai/supportsImages"])
+              : true,
+          ...(entry.description ? { description: entry.description } : {}),
+        }));
+      } else if (option.id === "mode") {
+        result.currentMode = typeof option.currentValue === "string" ? option.currentValue : null;
+        result.modes = entries.map((entry) => entry.value);
+      } else if (option.id === "speed") {
+        result.currentSpeed = typeof option.currentValue === "string" ? (option.currentValue as SpeedMode) : null;
+        result.speeds = entries.map((entry) => entry.value as SpeedMode);
+      } else {
+        const thoughtId = isThoughtOption(option);
+        if (thoughtId) {
+          result.thoughtConfigId = thoughtId;
+          result.currentThoughtLevel =
+            typeof option.currentValue === "string" ? normalizeEffortValue(option.currentValue) : null;
+          const levels: ThoughtLevel[] = [];
+          for (const entry of entries) {
+            const normalized = normalizeEffortValue(entry.value);
+            if (!normalized) continue;
+            if (!levels.includes(normalized)) levels.push(normalized);
+            result.thoughtWireValues[normalized] = entry.value;
+          }
+          result.thoughtLevels = levels;
+        }
+      }
     }
   }
+
+  if (result.models.length === 0 && Array.isArray(fallbackModels) && fallbackModels.length > 0) {
+    result.models = fallbackModels
+      .filter((m) => m && typeof m.modelId === "string" && m.modelId.trim())
+      .map((m) => ({
+        id: m.modelId,
+        name: normalizeTierDisplayName(m.name || m.modelId),
+        supportsImages: true,
+        ...(m.description ? { description: m.description } : {}),
+      }));
+  }
+
   return result;
 }
 
@@ -189,7 +274,7 @@ function flattenSelectOptions(
  * Peel optional speed and effort suffixes (e.g. `swe-2-1-xhigh-lightning`, `deepseek-v4-pro-max`)
  * while preserving exact ACP catalog IDs untouched.
  */
-function peelEffortAndSpeedSuffixes(slug: string): {
+export function peelEffortAndSpeedSuffixes(slug: string): {
   baseSlug: string;
   effort: ThoughtLevel | null;
   speed: SpeedMode | null;
@@ -371,7 +456,7 @@ function normalizeSlug(value: string): string {
   return value.toLowerCase().replace(/[.\s_]+/g, "-");
 }
 
-function normalizeEffortValue(raw: string | null | undefined): ThoughtLevel | null {
+export function normalizeEffortValue(raw: string | null | undefined): ThoughtLevel | null {
   if (!raw) return null;
   const norm = raw.trim().toLowerCase().replaceAll("-", "_");
   if (norm === "none" || norm === "off") return "none";
@@ -379,13 +464,13 @@ function normalizeEffortValue(raw: string | null | undefined): ThoughtLevel | nu
   if (norm === "low") return "low";
   if (norm === "medium") return "medium";
   if (norm === "high" || norm === "on") return "high";
-  if (norm === "xhigh" || norm === "extra_high" || norm === "very_high") return "xhigh";
-  if (norm === "max") return "max";
+  if (norm === "xhigh" || norm === "extra" || norm === "extra_high" || norm === "very_high") return "xhigh";
+  if (norm === "max" || norm === "ultra") return "max";
   return null;
 }
 
 /**
- * Pick the nearest supported effort level on the ordered scale for a specific Devin model.
+ * Pick the nearest supported effort level on the ordered scale for a specific model.
  */
 export function fitSupportedEffort(
   desired: ThoughtLevel | null,
@@ -414,7 +499,7 @@ export function fitSupportedEffort(
 }
 
 /**
- * Resolve ACP thought_level from model suffix, Anthropic output_config.effort, thinking config, and proxy defaults.
+ * Resolve ACP thought_level/effort from model suffix, Anthropic output_config.effort, thinking config, and proxy defaults.
  */
 export function resolveThoughtLevel(
   params: {
@@ -494,6 +579,9 @@ function inferMaxInputTokens(id: string): number {
   ) {
     return 1_000_000;
   }
+  if (lower.includes("gpt-") || lower.includes("codex") || lower.includes("grok")) {
+    return 400_000;
+  }
   return 262_144;
 }
 
@@ -513,15 +601,90 @@ export function formatAnthropicModelsList(
 
   const data: AnthropicModelInfo[] = list.map((model) => {
     const exposedId = useGatewayAliases ? toGatewayModelId(model.id) : model.id;
-    const aliased = exposedId !== model.id;
     const line = inferModelLine(model.id);
     return {
       type: "model",
       id: exposedId,
       display_name: model.name,
-      ...(aliased ? { description: `Devin: ${model.id}`.slice(0, 100) } : {}),
+      description: `Devin: ${model.id}`.slice(0, 100),
+      max_effort_level: "max",
       created_at: CREATED_AT_ISO,
       max_input_tokens: inferMaxInputTokens(model.id),
+      max_tokens: 64_000,
+      ...(line ? { line } : {}),
+      capabilities: {
+        thinking: {
+          types: {
+            enabled: { supported: true },
+            adaptive: { supported: true },
+            disabled: { supported: true },
+          },
+        },
+      },
+    };
+  });
+
+  return {
+    data,
+    has_more: false,
+    first_id: data[0]?.id ?? null,
+    last_id: data[data.length - 1]?.id ?? null,
+  };
+}
+
+/**
+ * Format multi-backend model catalog as Anthropic GET /v1/models payload.
+ */
+export function formatMultiBackendModelsList(
+  models: readonly BackendModelEntry[],
+  defaultModel: string,
+  options: { gatewayAliases?: boolean } = {},
+): AnthropicModelsListResponse {
+  const useGatewayAliases = options.gatewayAliases !== false;
+  if (models.length === 0) {
+    return formatAnthropicModelsList([], defaultModel, options);
+  }
+
+  const nameCounts = new Map<string, number>();
+  for (const model of models) {
+    nameCounts.set(model.name, (nameCounts.get(model.name) ?? 0) + 1);
+  }
+  const usedDisplayNames = new Set<string>();
+
+  const data: AnthropicModelInfo[] = models.map((model) => {
+    const isDevin = model.backendKind === "devin";
+    const exposedId = useGatewayAliases
+      ? isDevin
+        ? toGatewayModelId(model.nativeId)
+        : toGatewayModelId(model.qualifiedId, true)
+      : model.qualifiedId;
+    const line = inferModelLine(model.nativeId);
+    const description = (model.description ?? `${model.backendLabel}: ${model.nativeId}`).slice(0, 100);
+    const providerTag = description.includes(":") ? description.slice(0, description.indexOf(":")).trim() : model.backendLabel;
+
+    let displayName = model.name;
+    if ((nameCounts.get(model.name) ?? 0) > 1) {
+      if (isDevin && !usedDisplayNames.has(displayName)) {
+        // Keep Devin's primary copy clean when colliding with another backend.
+      } else {
+        displayName = `${model.name} (${providerTag})`;
+      }
+    }
+    if (usedDisplayNames.has(displayName)) {
+      let suffix = 2;
+      while (usedDisplayNames.has(`${displayName} #${suffix}`)) suffix += 1;
+      displayName = `${displayName} #${suffix}`;
+    }
+    usedDisplayNames.add(displayName);
+
+    return {
+      type: "model",
+      id: exposedId,
+      display_name: displayName,
+      description,
+      max_effort_level: "max",
+      created_at: CREATED_AT_ISO,
+      max_input_tokens: inferMaxInputTokens(model.nativeId),
       max_tokens: 64_000,
       ...(line ? { line } : {}),
       capabilities: {

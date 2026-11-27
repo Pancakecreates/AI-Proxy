@@ -1,8 +1,9 @@
 import http, { type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { resolve } from "node:path";
 import type { AcpClient } from "./acp-client.js";
-import { estimateInputTokens, handleMessagesRequest, sendAnthropicError } from "./anthropic.js";
-import { formatAnthropicModelsList } from "./models.js";
+import { estimateInputTokens, handleMessagesRequest, sendAnthropicError, type TurnRunner } from "./anthropic.js";
+import { formatAnthropicModelsList, formatMultiBackendModelsList } from "./models.js";
+import type { BackendRouter } from "./router.js";
 import type { SessionManager } from "./sessions.js";
 import type { AnthropicMessagesRequest, ProxyConfig } from "./types.js";
 
@@ -76,12 +77,16 @@ function resolveRequestCwd(req: IncomingMessage, defaultCwd: string): string {
   return defaultCwd;
 }
 
-export function createProxyServer(deps: {
-  config: ProxyConfig;
-  acp: AcpClient;
-  sessions: SessionManager;
-}): Server {
-  const { config, acp, sessions } = deps;
+export function createProxyServer(
+  deps:
+    | { config: ProxyConfig; router: BackendRouter }
+    | { config: ProxyConfig; acp: AcpClient; sessions: SessionManager },
+): Server {
+  const { config } = deps;
+  const router = "router" in deps ? deps.router : null;
+  const legacyAcp = "acp" in deps ? deps.acp : null;
+  const legacySessions = "sessions" in deps ? deps.sessions : null;
+  const turnRunner: TurnRunner = router ?? legacySessions!;
 
   const server = http.createServer(async (req, res) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
@@ -98,14 +103,28 @@ export function createProxyServer(deps: {
     const path = url.pathname;
 
     if (req.method === "GET" && (path === "/health" || path === "/")) {
-      sendJson(res, 200, {
-        ok: true,
-        devinReady: acp.isReady,
-        modelsCount: sessions.catalog.models.length,
-        activeSessions: sessions.activeSessionCount,
-        mode: config.mode,
-        cwd: config.cwd,
-      });
+      if (router) {
+        const backends = router.getHealthStatuses();
+        const devinBackend = backends.find((b) => b.kind === "devin");
+        sendJson(res, 200, {
+          ok: true,
+          devinReady: devinBackend?.ready ?? router.isAnyReady,
+          modelsCount: router.listModels().length,
+          activeSessions: router.activeSessionCount,
+          mode: config.mode,
+          cwd: config.cwd,
+          backends,
+        });
+      } else {
+        sendJson(res, 200, {
+          ok: true,
+          devinReady: legacyAcp!.isReady,
+          modelsCount: legacySessions!.catalog.models.length,
+          activeSessions: legacySessions!.activeSessionCount,
+          mode: config.mode,
+          cwd: config.cwd,
+        });
+      }
       return;
     }
 
@@ -118,18 +137,31 @@ export function createProxyServer(deps: {
       try {
         const refresh = url.searchParams.get("refresh") === "1";
         const rawIds = url.searchParams.get("raw") === "1";
-        if (refresh || sessions.catalog.models.length === 0) {
-          await sessions.warmUp(refresh);
+        if (router) {
+          if (refresh || router.listModels().length === 0) {
+            await router.warmUp(refresh);
+          }
+          sendJson(
+            res,
+            200,
+            formatMultiBackendModelsList(router.listModels(), config.defaultModel, {
+              gatewayAliases: config.gatewayAliases && !rawIds,
+            }),
+          );
+        } else {
+          if (refresh || legacySessions!.catalog.models.length === 0) {
+            await legacySessions!.warmUp(refresh);
+          }
+          sendJson(
+            res,
+            200,
+            formatAnthropicModelsList(legacySessions!.catalog.models, config.defaultModel, {
+              gatewayAliases: config.gatewayAliases && !rawIds,
+            }),
+          );
         }
-        sendJson(
-          res,
-          200,
-          formatAnthropicModelsList(sessions.catalog.models, config.defaultModel, {
-            gatewayAliases: config.gatewayAliases && !rawIds,
-          }),
-        );
       } catch (err) {
-        const message = err instanceof Error ? err.message : "Failed to load models from devin acp.";
+        const message = err instanceof Error ? err.message : "Failed to load models from backends.";
         sendAnthropicError(res, 502, "api_error", message);
       }
       return;
@@ -165,7 +197,7 @@ export function createProxyServer(deps: {
       }
 
       await handleMessagesRequest(req, res, body, {
-        sessions,
+        sessions: turnRunner,
         cwd: resolveRequestCwd(req, config.cwd),
       });
       return;

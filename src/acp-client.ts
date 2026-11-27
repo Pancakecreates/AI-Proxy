@@ -17,7 +17,7 @@ import type {
 const CLIENT_INFO = {
   name: "ai-anthropic-proxy",
   title: "AI-Anthropic-Proxy",
-  version: "1.2.0",
+  version: "1.4.0",
 } as const;
 
 const CLIENT_CAPABILITIES = {
@@ -39,7 +39,8 @@ export class AcpRpcError extends Error {
   get isSessionNotFound(): boolean {
     return (
       (this.code === -32016 && this.data?.["cognition.ai/errorKind"] === "session_not_found") ||
-      this.code === -32002
+      this.code === -32002 ||
+      (this.code === -32602 && /session not found/i.test(this.message))
     );
   }
 
@@ -60,11 +61,23 @@ export interface AcpClientEvents {
   sessionUpdate: [payload: { sessionId: string; update: AcpSessionUpdate }];
 }
 
+export interface AcpEndpointOptions {
+  label?: string;
+  executable?: string;
+  args?: string[];
+  env?: Record<string, string | undefined>;
+  authMethodIds?: string[];
+  supportsCloseSession?: boolean;
+  closeForceMeta?: boolean;
+}
+
 /**
- * Persistent JSON-RPC 2.0 over stdio client for `devin acp`.
+ * Persistent JSON-RPC 2.0 over stdio client for ACP-compatible CLIs
+ * (Devin, Antigravity, OpenCode, Grok).
  */
 export class AcpClient extends EventEmitter<AcpClientEvents> {
   readonly #config: ProxyConfig;
+  readonly #endpoint: AcpEndpointOptions;
   #proc: ChildProcessWithoutNullStreams | null = null;
   #rl: Interface | null = null;
   #nextId = 1;
@@ -74,10 +87,15 @@ export class AcpClient extends EventEmitter<AcpClientEvents> {
   #stopping = false;
   #permissionMode: DevinMode;
 
-  constructor(config: ProxyConfig) {
+  constructor(config: ProxyConfig, endpoint: AcpEndpointOptions = {}) {
     super();
     this.#config = config;
+    this.#endpoint = endpoint;
     this.#permissionMode = config.mode;
+  }
+
+  get label(): string {
+    return this.#endpoint.label ?? "Devin";
   }
 
   get isReady(): boolean {
@@ -104,15 +122,24 @@ export class AcpClient extends EventEmitter<AcpClientEvents> {
 
   async #startAndInitialize(): Promise<AcpInitializeResult> {
     this.#stopping = false;
-    const args = this.#config.acpArgs ?? ["acp", "--process-model", this.#config.processModel];
+    const executable = this.#endpoint.executable ?? this.#config.devinPath;
+    const args = this.#endpoint.args ?? this.#config.acpArgs ?? ["acp", "--process-model", this.#config.processModel];
     if (this.#config.debug) {
-      console.error(`[acp] spawning ${this.#config.devinPath} ${args.join(" ")}`);
+      console.error(`[acp:${this.label}] spawning ${executable} ${args.join(" ")}`);
     }
 
-    const child = spawn(this.#config.devinPath, args, {
+    const spawnEnv: NodeJS.ProcessEnv = { ...process.env };
+    if (this.#endpoint.env) {
+      for (const [k, v] of Object.entries(this.#endpoint.env)) {
+        if (v === undefined) delete spawnEnv[k];
+        else spawnEnv[k] = v;
+      }
+    }
+
+    const child = spawn(executable, args, {
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
-      env: { ...process.env },
+      env: spawnEnv,
     });
 
     this.#proc = child;
@@ -128,7 +155,7 @@ export class AcpClient extends EventEmitter<AcpClientEvents> {
       try {
         msg = JSON.parse(trimmed) as AcpJsonRpcMessage;
       } catch {
-        if (this.#config.debug) console.error("[acp] non-json stdout:", trimmed.slice(0, 300));
+        if (this.#config.debug) console.error(`[acp:${this.label}] non-json stdout:`, trimmed.slice(0, 300));
         return;
       }
       this.#handleMessage(child, msg);
@@ -136,7 +163,7 @@ export class AcpClient extends EventEmitter<AcpClientEvents> {
 
     child.stderr.on("data", (chunk: Buffer) => {
       if (this.#config.debug) {
-        process.stderr.write(`[devin stderr] ${chunk.toString("utf8")}`);
+        process.stderr.write(`[${this.label} stderr] ${chunk.toString("utf8")}`);
       }
     });
 
@@ -146,7 +173,7 @@ export class AcpClient extends EventEmitter<AcpClientEvents> {
 
     child.on("exit", (code, signal) => {
       const reason = signal ? `signal ${signal}` : `exit code ${code ?? "unknown"}`;
-      this.#handleProcessClose(child, new Error(`devin acp exited (${reason})`));
+      this.#handleProcessClose(child, new Error(`${this.label} acp exited (${reason})`));
     });
 
     const init = (await this.request(
@@ -158,6 +185,14 @@ export class AcpClient extends EventEmitter<AcpClientEvents> {
       },
       this.#config.startupTimeoutMs,
     )) as unknown as AcpInitializeResult;
+
+    if (this.#endpoint.authMethodIds && this.#endpoint.authMethodIds.length > 0) {
+      const advertised = new Set((init.authMethods ?? []).map((m) => m.id));
+      const selectedAuth = this.#endpoint.authMethodIds.find((id) => advertised.has(id));
+      if (selectedAuth) {
+        await this.request("authenticate", { methodId: selectedAuth }, this.#config.startupTimeoutMs);
+      }
+    }
 
     this.#initResult = init;
     return init;
@@ -261,7 +296,7 @@ export class AcpClient extends EventEmitter<AcpClientEvents> {
   ): Promise<Record<string, unknown>> {
     const child = this.#proc;
     if (!child || child.exitCode !== null || !child.stdin.writable) {
-      return Promise.reject(new Error("ACP process is not running."));
+      return Promise.reject(new Error(`${this.label} ACP process is not running.`));
     }
 
     const id = this.#nextId++;
@@ -279,7 +314,7 @@ export class AcpClient extends EventEmitter<AcpClientEvents> {
 
       const timer = setTimeout(() => {
         cleanup();
-        reject(new Error(`ACP request "${method}" timed out after ${timeoutMs}ms`));
+        reject(new Error(`${this.label} ACP request "${method}" timed out after ${timeoutMs}ms`));
       }, timeoutMs);
 
       if (signal) {
@@ -355,9 +390,12 @@ export class AcpClient extends EventEmitter<AcpClientEvents> {
   }
 
   async closeSession(sessionId: string): Promise<void> {
-    if (!this.isReady) return;
+    if (!this.isReady || this.#endpoint.supportsCloseSession === false) return;
     try {
-      await this.request("session/close", { sessionId, _meta: { "cognition.ai/force": true } }, 5_000);
+      const params: Record<string, unknown> = this.#endpoint.closeForceMeta !== false
+        ? { sessionId, _meta: { "cognition.ai/force": true } }
+        : { sessionId };
+      await this.request("session/close", params, 5_000);
     } catch {
       // Best-effort forced close
     }
