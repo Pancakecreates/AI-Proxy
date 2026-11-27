@@ -5,6 +5,7 @@ import { estimateInputTokens, type TurnRunner } from "./anthropic.js";
 import type { AnthropicContentBlock, AnthropicMessageParam, AnthropicMessagesRequest, ThoughtLevel, TurnUsage } from "./types.js";
 
 const EFFORT_VALUES = new Set<string>(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
+const KEEPALIVE_INTERVAL_MS = 15_000;
 
 function normalizeEffortValue(val: unknown): ThoughtLevel | undefined {
   if (typeof val !== "string") return undefined;
@@ -242,6 +243,10 @@ export async function handleOpenAIChatRequest(
     choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }],
   });
 
+  const pingTimer = setInterval(() => {
+    if (!res.writableEnded && !res.destroyed) res.write(": keepalive\n\n");
+  }, KEEPALIVE_INTERVAL_MS);
+
   let latestUsage: TurnUsage = { inputTokens: 0, outputTokens: 0 };
   let thinkingLen = 0;
 
@@ -303,6 +308,7 @@ export async function handleOpenAIChatRequest(
       res.end();
     }
   } finally {
+    clearInterval(pingTimer);
     req.off("close", onClose);
     res.off("close", onClose);
   }
@@ -467,6 +473,10 @@ export async function handleOpenAIResponsesRequest(
     part: { type: "output_text", text: "", annotations: [] },
   });
 
+  const pingTimer = setInterval(() => {
+    if (!res.writableEnded && !res.destroyed) res.write(": keepalive\n\n");
+  }, KEEPALIVE_INTERVAL_MS);
+
   let text = "";
   let thinkingLen = 0;
   let latestUsage: TurnUsage = { inputTokens: 0, outputTokens: 0 };
@@ -548,6 +558,7 @@ export async function handleOpenAIResponsesRequest(
       res.end();
     }
   } finally {
+    clearInterval(pingTimer);
     req.off("close", onClose);
     res.off("close", onClose);
   }
