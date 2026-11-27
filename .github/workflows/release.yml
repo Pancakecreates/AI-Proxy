@@ -30,7 +30,24 @@ permissions:
 jobs:
   create-release:
     runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
+      - name: Compute target matrix
+        id: set-matrix
+        shell: bash
+        run: |
+          P="${{ inputs.platforms }}"
+          if [ "$P" = "windows" ]; then
+            echo 'matrix={"include":[{"platform":"windows-latest","args":""}]}' >> "$GITHUB_OUTPUT"
+          elif [ "$P" = "macos" ]; then
+            echo 'matrix={"include":[{"platform":"macos-latest","args":"--target universal-apple-darwin"}]}' >> "$GITHUB_OUTPUT"
+          elif [ "$P" = "linux" ]; then
+            echo 'matrix={"include":[{"platform":"ubuntu-22.04","args":""}]}' >> "$GITHUB_OUTPUT"
+          else
+            echo 'matrix={"include":[{"platform":"windows-latest","args":""},{"platform":"macos-latest","args":"--target universal-apple-darwin"},{"platform":"ubuntu-22.04","args":""}]}' >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -66,21 +83,9 @@ jobs:
     needs: create-release
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - platform: windows-latest
-            args: ""
-          - platform: macos-latest
-            args: "--target universal-apple-darwin"
-          - platform: ubuntu-22.04
-            args: ""
+      matrix: ${{ fromJson(needs.create-release.outputs.matrix) }}
 
     runs-on: ${{ matrix.platform }}
-    if: >-
-      inputs.platforms == 'all' ||
-      (inputs.platforms == 'windows' && matrix.platform == 'windows-latest') ||
-      (inputs.platforms == 'macos' && matrix.platform == 'macos-latest') ||
-      (inputs.platforms == 'linux' && matrix.platform == 'ubuntu-22.04')
 
     steps:
       - name: Checkout repository
