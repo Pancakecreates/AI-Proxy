@@ -1,0 +1,42 @@
+import React from "react";
+import { Search } from "lucide-react";
+import { cn } from "./Button";
+
+export const Input = React.forwardRef<HTMLInputElement, React.InputHTMLAttributes<HTMLInputElement>>(
+  ({ className, ...props }, ref) => (
+    <input
+      ref={ref}
+      className={cn(
+        "h-8 w-full rounded-[7px] border border-[var(--border)] bg-[var(--bg)] px-2.5 text-xs text-[var(--fg)] placeholder:text-[var(--fg-subtle)] transition-colors hover:border-[var(--border-strong)] disabled:opacity-50",
+        className,
+      )}
+      {...props}
+    />
+  ),
+);
+Input.displayName = "Input";
+
+interface SearchInputProps extends React.InputHTMLAttributes<HTMLInputElement> {
+  containerClassName?: string;
+}
+
+export const SearchInput: React.FC<SearchInputProps> = ({ containerClassName, className, ...props }) => (
+  <div className={cn("relative", containerClassName)}>
+    <Search className="pointer-events-none size-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--fg-subtle)]" />
+    <Input className={cn("pl-8", className)} {...props} />
+  </div>
+);
+
+interface TextareaProps extends React.TextareaHTMLAttributes<HTMLTextAreaElement> {}
+
+export const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(({ className, ...props }, ref) => (
+  <textarea
+    ref={ref}
+    className={cn(
+      "w-full rounded-[8px] border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-xs text-[var(--fg)] placeholder:text-[var(--fg-subtle)] transition-colors hover:border-[var(--border-strong)] disabled:opacity-50",
+      className,
+    )}
+    {...props}
+  />
+));
+Textarea.displayName = "Textarea";

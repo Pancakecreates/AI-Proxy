@@ -1,11 +1,30 @@
 import React, { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { RefreshCw, Search, Trash2 } from "lucide-react";
-import type { AppLogEntry, RequestLogEntry } from "./types";
+import { RefreshCw, Trash2 } from "lucide-react";
+import type {
+  AntigravityAccountConfig,
+  AppLogEntry,
+  BackendHealthStatus,
+  CustomAcpAgentConfig,
+  RequestLogEntry,
+} from "./types";
 import { Select } from "./Select";
+import { BrandIcon } from "./BrandIcon";
+import { resolveAccountInfo } from "./backendDisplay";
+import { Badge, Button, Panel, SearchInput, Segmented } from "./components/ui";
 
-export const LogsView: React.FC = () => {
+interface LogsViewProps {
+  backends?: BackendHealthStatus[];
+  antigravityAccounts?: AntigravityAccountConfig[];
+  customAcpAgents?: CustomAcpAgentConfig[];
+}
+
+export const LogsView: React.FC<LogsViewProps> = ({
+  backends = [],
+  antigravityAccounts = [],
+  customAcpAgents = [],
+}) => {
   const [subTab, setSubTab] = useState<"requests" | "system">("requests");
   const [reqLogs, setReqLogs] = useState<RequestLogEntry[]>([]);
   const [appLogs, setAppLogs] = useState<AppLogEntry[]>([]);
@@ -26,8 +45,28 @@ export const LogsView: React.FC = () => {
     loadLogs().catch(() => {});
   }, [search, levelFilter]);
 
+  const searchRef = React.useRef(search);
+  searchRef.current = search;
+
   useEffect(() => {
     const u1 = listen<RequestLogEntry>("request-log", (ev) => {
+      const q = searchRef.current.trim().toLowerCase();
+      if (q) {
+        const r = ev.payload;
+        const hay = [
+          r.model,
+          r.resolvedModel,
+          r.backendKey,
+          r.accountLabel,
+          r.error,
+          r.promptPreview,
+          r.effort,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        if (!hay.includes(q)) return;
+      }
       setReqLogs((prev) => [ev.payload, ...prev].slice(0, 200));
     });
     const u2 = listen<AppLogEntry>("app-log", (ev) => {
@@ -47,42 +86,23 @@ export const LogsView: React.FC = () => {
   return (
     <div className="flex flex-col h-full overflow-hidden">
       <div className="border-b bg-[var(--bg-elevated)] px-6 py-3 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setSubTab("requests")}
-            className={`h-8 rounded-md px-3 text-xs font-medium transition-colors ${
-              subTab === "requests"
-                ? "bg-[var(--accent)] text-[var(--accent-fg)]"
-                : "border bg-[var(--bg)] text-[var(--fg-muted)] hover:bg-[var(--bg-subtle)]"
-            }`}
-          >
-            HTTP и чат запросы ({reqLogs.length})
-          </button>
-          <button
-            type="button"
-            onClick={() => setSubTab("system")}
-            className={`h-8 rounded-md px-3 text-xs font-medium transition-colors ${
-              subTab === "system"
-                ? "bg-[var(--accent)] text-[var(--accent-fg)]"
-                : "border bg-[var(--bg)] text-[var(--fg-muted)] hover:bg-[var(--bg-subtle)]"
-            }`}
-          >
-            Системные логи CLI ({appLogs.length})
-          </button>
-        </div>
+        <Segmented
+          value={subTab}
+          onChange={setSubTab}
+          options={[
+            { value: "requests", label: `HTTP и чат запросы (${reqLogs.length})` },
+            { value: "system", label: `Системные логи CLI (${appLogs.length})` },
+          ]}
+        />
 
         <div className="flex items-center gap-2">
           {subTab === "requests" ? (
-            <div className="relative">
-              <Search className="size-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--fg-subtle)]" />
-              <input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Фильтр по модели или тексту..."
-                className="h-8 w-56 rounded-md border bg-[var(--bg)] pl-8 pr-3 text-xs"
-              />
-            </div>
+            <SearchInput
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Поиск по модели, аккаунту или тексту..."
+              className="w-64"
+            />
           ) : (
             <Select
               value={levelFilter}
@@ -98,181 +118,223 @@ export const LogsView: React.FC = () => {
               ]}
             />
           )}
-          <button
-            type="button"
-            onClick={loadLogs}
-            className="inline-flex h-8 items-center justify-center rounded-md border bg-[var(--bg)] px-2.5 text-xs hover:bg-[var(--bg-subtle)]"
-          >
+          <Button variant="secondary" size="icon" onClick={loadLogs} title="Обновить логи" aria-label="Обновить логи">
             <RefreshCw className="size-3.5" />
-          </button>
-          <button
-            type="button"
-            onClick={handleClear}
-            className="inline-flex h-8 items-center gap-1 rounded-md border px-2.5 text-xs text-[var(--danger)] hover:bg-[var(--danger)]/10"
-          >
+          </Button>
+          <Button variant="danger" size="sm" onClick={handleClear}>
             <Trash2 className="size-3.5" />
             <span>Очистить</span>
-          </button>
+          </Button>
         </div>
       </div>
 
       <div className="flex-1 overflow-y-auto p-6">
         {subTab === "requests" ? (
-          <div className="max-w-6xl mx-auto rounded-lg border bg-[var(--bg-elevated)] overflow-hidden">
-            <table className="w-full text-xs text-left border-collapse">
-              <thead className="border-b bg-[var(--bg-subtle)] text-[var(--fg-muted)]">
-                <tr>
-                  <th className="py-2 px-3 font-medium">Время</th>
-                  <th className="py-2 px-3 font-medium">Протокол</th>
-                  <th className="py-2 px-3 font-medium">Модель</th>
-                  <th className="py-2 px-3 font-medium">Усилие</th>
-                  <th className="py-2 px-3 font-medium">Статус</th>
-                  <th className="py-2 px-3 font-medium text-right">Токены</th>
-                  <th className="py-2 px-3 font-medium text-right">Задержка</th>
-                  <th className="py-2 px-3 font-medium text-right">Стоимость</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y">
-                {reqLogs.length === 0 ? (
+          <Panel className="max-w-7xl mx-auto overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs text-left border-collapse">
+                <thead className="border-b bg-[var(--bg-subtle)]/70 text-[var(--fg-muted)]">
                   <tr>
-                    <td colSpan={8} className="py-10 text-center text-[var(--fg-muted)]">
-                      Логи запросов пусты.
-                    </td>
+                    <th className="py-2.5 px-3 font-medium whitespace-nowrap">Время</th>
+                    <th className="py-2.5 px-3 font-medium whitespace-nowrap">Протокол</th>
+                    <th className="py-2.5 px-3 font-medium whitespace-nowrap">Аккаунт</th>
+                    <th className="py-2.5 px-3 font-medium whitespace-nowrap">Модель</th>
+                    <th className="py-2.5 px-3 font-medium whitespace-nowrap">Усилие</th>
+                    <th className="py-2.5 px-3 font-medium whitespace-nowrap">Статус</th>
+                    <th className="py-2.5 px-3 font-medium text-right whitespace-nowrap">Токены</th>
+                    <th className="py-2.5 px-3 font-medium text-right whitespace-nowrap">Задержка</th>
+                    <th className="py-2.5 px-3 font-medium text-right whitespace-nowrap">Стоимость</th>
                   </tr>
-                ) : (
-                  reqLogs.map((r) => (
-                    <React.Fragment key={r.id}>
-                      <tr
-                        onClick={() => setExpandedId(expandedId === r.id ? null : r.id)}
-                        className="cursor-pointer hover:bg-[var(--bg-subtle)]/60"
-                      >
-                        <td className="py-2 px-3 tabular-nums text-[var(--fg-subtle)] whitespace-nowrap">
-                          {new Date(r.createdAt).toLocaleTimeString()}
-                        </td>
-                        <td className="py-2 px-3">
-                          <span className="rounded border bg-[var(--bg)] px-1.5 py-0.5 font-mono text-[10px]">
-                            {r.protocol}
-                          </span>
-                        </td>
-                        <td className="py-2 px-3 font-mono text-[11px] max-w-[260px]">
-                          <div className="truncate">{r.resolvedModel || r.model}</div>
-                          {r.resolvedModel && r.resolvedModel !== r.model && (
-                            <div className="truncate text-[10px] text-[var(--fg-subtle)]">
-                              {r.model}
-                            </div>
-                          )}
-                        </td>
-                        <td className="py-2 px-3 text-[11px] text-[var(--fg-muted)] whitespace-nowrap">
-                          {r.effort || "—"}
-                        </td>
-                        <td className="py-2 px-3 tabular-nums">
-                          <span
-                            className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
-                              r.status >= 200 && r.status < 400
-                                ? "bg-[var(--success)]/12 text-[var(--success)]"
-                                : "bg-[var(--danger)]/12 text-[var(--danger)]"
+                </thead>
+                <tbody className="divide-y">
+                  {reqLogs.length === 0 ? (
+                    <tr>
+                      <td colSpan={9} className="py-12 text-center text-[var(--fg-muted)]">
+                        Логи запросов пусты.
+                      </td>
+                    </tr>
+                  ) : (
+                    reqLogs.map((r) => {
+                      const acc = resolveAccountInfo({
+                        backendKey: r.backendKey,
+                        accountLabel: r.accountLabel,
+                        requestedModel: r.model,
+                        backends,
+                        antigravityAccounts,
+                        customAcpAgents,
+                      });
+                      const isExpanded = expandedId === r.id;
+
+                      return (
+                        <React.Fragment key={r.id}>
+                          <tr
+                            onClick={() => setExpandedId(isExpanded ? null : r.id)}
+                            className={`cursor-pointer transition-colors ${
+                              isExpanded ? "bg-[var(--bg-subtle)]/75" : "hover:bg-[var(--bg-subtle)]/45"
                             }`}
                           >
-                            {r.status}
-                          </span>
-                        </td>
-                        <td className="py-2 px-3 text-right tabular-nums text-[var(--fg-muted)]">
-                          {r.inputTokens} / {r.outputTokens}
-                        </td>
-                        <td className="py-2 px-3 text-right tabular-nums text-[var(--fg-muted)]">
-                          {r.latencyMs} мс
-                        </td>
-                        <td className="py-2 px-3 text-right tabular-nums whitespace-nowrap">
-                          {r.costUsd > 0 ? (
-                            <span>${r.costUsd.toFixed(4)}</span>
-                          ) : r.apiEquivalentUsd > 0 ? (
-                            <span
-                              className="text-[var(--fg-subtle)]"
-                              title="Расчётный эквивалент стоимости API — реальное списание неизвестно"
-                            >
-                              ~${r.apiEquivalentUsd.toFixed(4)}
-                            </span>
-                          ) : (
-                            <span className="text-[var(--fg-subtle)]">—</span>
+                            <td className="py-[var(--density-cell-y)] px-3 tabular-nums text-[var(--fg-subtle)] whitespace-nowrap">
+                              {new Date(r.createdAt).toLocaleTimeString()}
+                            </td>
+                            <td className="py-[var(--density-cell-y)] px-3 whitespace-nowrap">
+                              <Badge variant="mono" className="text-[10px]">
+                                {r.protocol}
+                              </Badge>
+                            </td>
+                            <td className="py-[var(--density-cell-y)] px-3 max-w-[200px]">
+                              {acc.title === "—" ? (
+                                <span className="text-[var(--fg-subtle)]">—</span>
+                              ) : (
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <BrandIcon brand={acc.brand} size={14} />
+                                  <div className="min-w-0">
+                                    <div
+                                      className={`truncate font-medium ${
+                                        acc.inferred ? "text-[var(--fg-muted)]" : "text-[var(--fg)]"
+                                      }`}
+                                      title={acc.key ? `${acc.title} (${acc.key})` : acc.title}
+                                    >
+                                      {acc.inferred ? `~ ${acc.title}` : acc.title}
+                                    </div>
+                                    {acc.subtitle && (
+                                      <div className="truncate text-[10px] text-[var(--fg-subtle)]">
+                                        {acc.subtitle}
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              )}
+                            </td>
+                            <td className="py-[var(--density-cell-y)] px-3 text-[11px] max-w-[250px]">
+                              <div className="truncate text-[var(--fg)]">{r.resolvedModel || r.model}</div>
+                              {r.resolvedModel && r.resolvedModel !== r.model && (
+                                <div className="truncate text-[10px] text-[var(--fg-subtle)]">{r.model}</div>
+                              )}
+                            </td>
+                            <td className="py-[var(--density-cell-y)] px-3 text-[11px] text-[var(--fg-muted)] whitespace-nowrap">
+                              {r.effort || "—"}
+                            </td>
+                            <td className="py-[var(--density-cell-y)] px-3 whitespace-nowrap">
+                              <Badge
+                                variant={r.status >= 200 && r.status < 400 ? "success" : "danger"}
+                                className="rounded-full px-2 text-[10px]"
+                              >
+                                {r.status}
+                              </Badge>
+                            </td>
+                            <td className="py-[var(--density-cell-y)] px-3 text-right tabular-nums text-[var(--fg-muted)] whitespace-nowrap">
+                              ↑ {r.inputTokens.toLocaleString()} · ↓ {r.outputTokens.toLocaleString()}
+                            </td>
+                            <td className="py-[var(--density-cell-y)] px-3 text-right tabular-nums text-[var(--fg-muted)] whitespace-nowrap">
+                              {r.latencyMs} мс
+                            </td>
+                            <td className="py-[var(--density-cell-y)] px-3 text-right tabular-nums whitespace-nowrap">
+                              {r.costUsd > 0 ? (
+                                <span className="font-medium text-[var(--fg)]">${r.costUsd.toFixed(4)}</span>
+                              ) : r.apiEquivalentUsd > 0 ? (
+                                <span
+                                  className="text-[var(--fg-subtle)]"
+                                  title="Расчётный эквивалент стоимости API — реальное списание неизвестно"
+                                >
+                                  ~${r.apiEquivalentUsd.toFixed(4)}
+                                </span>
+                              ) : (
+                                <span className="text-[var(--fg-subtle)]">—</span>
+                              )}
+                            </td>
+                          </tr>
+                          {isExpanded && (
+                            <tr className="bg-[var(--bg)]">
+                              <td colSpan={9} className="p-3.5 space-y-2.5 text-[11px]">
+                                <div className="flex flex-wrap gap-x-5 gap-y-1.5 text-[var(--fg-muted)] tabular-nums">
+                                  <span>
+                                    Аккаунт:{" "}
+                                    <span className="font-medium text-[var(--fg)]">
+                                      {acc.title}
+                                      {r.backendKey ? ` (${r.backendKey})` : ""}
+                                    </span>
+                                  </span>
+                                  <span>
+                                    ID запроса: <code className="text-[var(--fg)]">{r.requestId}</code>
+                                  </span>
+                                  <span>
+                                    Запрошено: <code className="text-[var(--fg)]">{r.model}</code>
+                                  </span>
+                                  <span>
+                                    Исполнено:{" "}
+                                    <code className="text-[var(--fg)]">{r.resolvedModel || "—"}</code>
+                                  </span>
+                                  <span>Усилие: {r.effort || "—"}</span>
+                                  <span>Токены: {r.usageSource === "measured" ? "измерены" : "оценка"}</span>
+                                  <span>Списано: {r.costUsd > 0 ? `$${r.costUsd.toFixed(5)}` : "неизвестно"}</span>
+                                  <span title="Расчётный эквивалент стоимости публичного API">
+                                    Экв. API: ~${r.apiEquivalentUsd.toFixed(5)}
+                                  </span>
+                                </div>
+                                {r.error && (
+                                  <div className="rounded-[7px] border border-[var(--danger)]/35 bg-[var(--danger-soft)] p-2.5 text-[var(--danger)]">
+                                    {r.error}
+                                  </div>
+                                )}
+                                {r.promptPreview && (
+                                  <div>
+                                    <div className="font-medium text-[var(--fg-muted)] mb-1">Запрос</div>
+                                    <pre className="rounded-[7px] border bg-[var(--bg-elevated)] p-2.5 whitespace-pre-wrap text-[var(--fg)]">
+                                      {r.promptPreview}
+                                    </pre>
+                                  </div>
+                                )}
+                                {r.responsePreview && (
+                                  <div>
+                                    <div className="font-medium text-[var(--fg-muted)] mb-1">Ответ</div>
+                                    <pre className="rounded-[7px] border bg-[var(--bg-elevated)] p-2.5 whitespace-pre-wrap text-[var(--fg)]">
+                                      {r.responsePreview}
+                                    </pre>
+                                  </div>
+                                )}
+                              </td>
+                            </tr>
                           )}
-                        </td>
-                      </tr>
-                      {expandedId === r.id && (
-                        <tr className="bg-[var(--bg)]">
-                          <td colSpan={8} className="p-3 space-y-2 text-[11px]">
-                            <div className="flex flex-wrap gap-x-4 gap-y-1 text-[var(--fg-muted)] tabular-nums">
-                              <span>ID запроса: <code className="font-mono">{r.requestId}</code></span>
-                              <span>Запрошено: <code className="font-mono">{r.model}</code></span>
-                              <span>Исполнено: <code className="font-mono">{r.resolvedModel || "—"}</code></span>
-                              <span>Усилие: {r.effort || "—"}</span>
-                              <span>Шлюз: {r.backendKey || "—"}</span>
-                              <span>Токены: {r.usageSource === "measured" ? "измерены" : "оценка"}</span>
-                              <span>
-                                Списано: {r.costUsd > 0 ? `$${r.costUsd.toFixed(5)}` : "неизвестно"}
-                              </span>
-                              <span title="Расчётный эквивалент стоимости публичного API">
-                                Экв. API: ~${r.apiEquivalentUsd.toFixed(5)}
-                              </span>
-                            </div>
-                            {r.error && (
-                              <div className="rounded border border-[var(--danger)]/40 bg-[var(--danger)]/10 p-2 text-[var(--danger)] font-mono">
-                                {r.error}
-                              </div>
-                            )}
-                            {r.promptPreview && (
-                              <div>
-                                <div className="font-medium text-[var(--fg-muted)] mb-0.5">Запрос:</div>
-                                <pre className="rounded border bg-[var(--bg-elevated)] p-2 whitespace-pre-wrap font-mono">
-                                  {r.promptPreview}
-                                </pre>
-                              </div>
-                            )}
-                            {r.responsePreview && (
-                              <div>
-                                <div className="font-medium text-[var(--fg-muted)] mb-0.5">Ответ:</div>
-                                <pre className="rounded border bg-[var(--bg-elevated)] p-2 whitespace-pre-wrap font-mono">
-                                  {r.responsePreview}
-                                </pre>
-                              </div>
-                            )}
-                          </td>
-                        </tr>
-                      )}
-                    </React.Fragment>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
+                        </React.Fragment>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </Panel>
         ) : (
-          <div className="max-w-6xl mx-auto rounded-lg border bg-[var(--bg-elevated)] divide-y font-mono text-[11px]">
+          <Panel className="max-w-7xl mx-auto divide-y text-[11px] overflow-hidden">
             {appLogs.length === 0 ? (
-              <div className="p-8 text-center font-sans text-xs text-[var(--fg-muted)]">
+              <div className="p-10 text-center font-sans text-xs text-[var(--fg-muted)]">
                 Системные логи пусты.
               </div>
             ) : (
               appLogs.map((l) => (
-                <div key={l.id} className="flex items-start gap-3 px-3 py-2">
+                <div key={l.id} className="flex items-start gap-3 px-3.5 py-2 hover:bg-[var(--bg-subtle)]/40">
                   <span className="text-[var(--fg-subtle)] tabular-nums shrink-0">
                     {new Date(l.createdAt).toLocaleTimeString()}
                   </span>
-                  <span
-                    className={`font-semibold w-11 shrink-0 ${
+                  <Badge
+                    variant={
                       l.level === "error"
-                        ? "text-[var(--danger)]"
+                        ? "danger"
                         : l.level === "warn"
-                          ? "text-[var(--warning)]"
-                          : "text-[var(--accent)]"
-                    }`}
+                          ? "warning"
+                          : l.level === "debug"
+                            ? "neutral"
+                            : "accent"
+                    }
+                    className="w-12 justify-center font-sans text-[10px] shrink-0"
                   >
                     {l.level}
-                  </span>
+                  </Badge>
                   <span className="text-[var(--fg-muted)] shrink-0">[{l.source}]</span>
                   <span className="text-[var(--fg)] break-all">{l.message}</span>
                 </div>
               ))
             )}
-          </div>
+          </Panel>
         )}
       </div>
     </div>

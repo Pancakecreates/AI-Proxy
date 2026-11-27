@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
@@ -26,6 +27,7 @@ import { AccountsView } from "./AccountsView";
 import { UsageView } from "./UsageView";
 import { LogsView } from "./LogsView";
 import { SettingsView } from "./SettingsView";
+import { refreshQuotas } from "./quotaCache";
 
 type TabId = "overview" | "chat" | "models" | "accounts" | "usage" | "logs" | "settings";
 
@@ -49,6 +51,7 @@ export function App() {
   const [warmingUp, setWarmingUp] = useState(false);
   const [chatPreselectModel, setChatPreselectModel] = useState<string | null>(null);
   const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo | null>(null);
+  const [appVersion, setAppVersion] = useState<string>("");
 
   const loadAll = async (usageDays = 30) => {
     try {
@@ -71,6 +74,8 @@ export function App() {
 
   useEffect(() => {
     loadAll();
+    refreshQuotas().catch(() => {});
+    getVersion().then(setAppVersion).catch(() => {});
     const u1 = listen("proxy-status-updated", () => {
       invoke<ProxyRuntimeStatus>("get_proxy_status").then(setStatus).catch(() => {});
       invoke<BackendModelEntry[]>("list_models").then(setModels).catch(() => {});
@@ -107,12 +112,13 @@ export function App() {
           : settings.theme;
       html.setAttribute("data-theme", resolved);
       html.setAttribute("data-accent", settings.accent || "copper");
+      html.setAttribute("data-density", settings.density || "comfortable");
     };
     apply();
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
     mq.addEventListener("change", apply);
     return () => mq.removeEventListener("change", apply);
-  }, [settings?.theme, settings?.accent]);
+  }, [settings?.theme, settings?.accent, settings?.density]);
 
   const handleSaveSettings = async (next: AppSettings, restart = true) => {
     const saved = await invoke<AppSettings>("save_settings", {
@@ -162,6 +168,8 @@ export function App() {
     );
   }
 
+  const agyAccounts = runtimes?.antigravityAccounts ?? settings.antigravityAccounts;
+
   return (
     <div className="h-dvh w-screen flex flex-col overflow-hidden bg-[var(--bg)] text-[var(--fg)]">
       <TitleBar
@@ -174,7 +182,7 @@ export function App() {
       />
 
       <div className="flex-1 flex min-h-0 overflow-hidden">
-        <nav className="w-52 shrink-0 border-r bg-[var(--bg-elevated)] p-2.5 flex flex-col justify-between">
+        <nav className="w-52 shrink-0 border-r bg-[var(--sidebar-bg)] p-2.5 flex flex-col justify-between">
           <div className="space-y-0.5">
             {NAV_ITEMS.map((item) => {
               const Icon = item.icon;
@@ -184,16 +192,16 @@ export function App() {
                   key={item.id}
                   type="button"
                   onClick={() => setTab(item.id)}
-                  className={`w-full flex items-center gap-2.5 rounded-md px-3 py-2 text-xs font-medium transition-colors ${
+                  className={`w-full flex items-center gap-2.5 rounded-[7px] px-2.5 py-1.5 text-xs font-medium transition-colors ${
                     active
-                      ? "bg-[var(--accent-soft)] text-[var(--fg)]"
-                      : "text-[var(--fg-muted)] hover:bg-[var(--bg-subtle)] hover:text-[var(--fg)]"
+                      ? "bg-[var(--bg-subtle)] text-[var(--fg)] shadow-[var(--panel-highlight)]"
+                      : "text-[var(--fg-muted)] hover:bg-[var(--bg-subtle)]/55 hover:text-[var(--fg)]"
                   }`}
                 >
-                  <Icon className={`size-4 ${active ? "text-[var(--accent)]" : ""}`} />
-                  <span>{item.label}</span>
+                  <Icon className={`size-4 shrink-0 ${active ? "text-[var(--accent)]" : "text-[var(--fg-subtle)]"}`} />
+                  <span className="truncate">{item.label}</span>
                   {item.id === "models" && models.length > 0 && (
-                    <span className="ml-auto text-[10px] text-[var(--fg-subtle)] tabular-nums">
+                    <span className="ml-auto rounded-[5px] bg-[var(--bg)] border border-[var(--border)] px-1.5 py-0.5 text-[10px] text-[var(--fg-subtle)] tabular-nums">
                       {models.length}
                     </span>
                   )}
@@ -202,15 +210,35 @@ export function App() {
             })}
           </div>
 
-          <div className="border-t pt-2.5 px-2 text-[11px] text-[var(--fg-subtle)] space-y-1 tabular-nums">
-            <div className="flex justify-between">
-              <span>Anthropic</span>
-              <span className="font-mono">:{settings.anthropicPort}</span>
+          <div className="border-t pt-2.5 px-2 text-[11px] text-[var(--fg-subtle)] space-y-1.5 tabular-nums">
+            <div className="flex items-center justify-between">
+              <span className="flex items-center gap-1.5">
+                <span
+                  className={`size-1.5 rounded-full ${
+                    status?.running && settings.enableAnthropic ? "bg-[var(--success)]" : "bg-[var(--border-strong)]"
+                  }`}
+                />
+                <span>Anthropic</span>
+              </span>
+              <span className="text-[var(--fg-muted)]">:{settings.anthropicPort}</span>
             </div>
-            <div className="flex justify-between">
-              <span>OpenAI</span>
-              <span className="font-mono">:{settings.openaiPort}</span>
+            <div className="flex items-center justify-between">
+              <span className="flex items-center gap-1.5">
+                <span
+                  className={`size-1.5 rounded-full ${
+                    status?.running && settings.enableOpenai ? "bg-[var(--success)]" : "bg-[var(--border-strong)]"
+                  }`}
+                />
+                <span>OpenAI</span>
+              </span>
+              <span className="text-[var(--fg-muted)]">:{settings.openaiPort}</span>
             </div>
+            {appVersion && (
+              <div className="pt-1 border-t border-[var(--border)]/60 flex items-center justify-between text-[10px] text-[var(--fg-subtle)]">
+                <span>Версия</span>
+                <span>v{appVersion}</span>
+              </div>
+            )}
           </div>
         </nav>
 
@@ -253,9 +281,21 @@ export function App() {
             />
           )}
           {tab === "usage" && (
-            <UsageView usage={usage} onReload={(d) => loadAll(d)} />
+            <UsageView
+              usage={usage}
+              backends={status?.backends}
+              antigravityAccounts={agyAccounts}
+              customAcpAgents={settings.customAcpAgents}
+              onReload={(d) => loadAll(d)}
+            />
           )}
-          {tab === "logs" && <LogsView />}
+          {tab === "logs" && (
+            <LogsView
+              backends={status?.backends}
+              antigravityAccounts={agyAccounts}
+              customAcpAgents={settings.customAcpAgents}
+            />
+          )}
           {tab === "settings" && (
             <SettingsView
               settings={settings}

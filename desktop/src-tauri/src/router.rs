@@ -34,7 +34,6 @@ impl BackendInstance {
         }
     }
 
-    #[allow(dead_code)]
     pub fn label(&self) -> &str {
         match self {
             Self::Acp(a) => &a.cfg.label,
@@ -80,6 +79,36 @@ impl BackendInstance {
         match self {
             Self::Acp(a) => a.shutdown().await,
             Self::Codex(c) => c.shutdown().await,
+        }
+    }
+}
+
+pub struct RunTurnOutput {
+    pub turn: TurnResult,
+    pub backend_key: String,
+    pub backend_label: String,
+    pub backend_kind: BackendKind,
+    pub resolved_qid: String,
+    pub effective_effort: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RunTurnError {
+    pub message: String,
+    pub backend_key: Option<String>,
+    pub backend_label: Option<String>,
+    pub resolved_model: Option<String>,
+    pub effort: Option<String>,
+}
+
+impl From<String> for RunTurnError {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            backend_key: None,
+            backend_label: None,
+            resolved_model: None,
+            effort: None,
         }
     }
 }
@@ -583,7 +612,7 @@ impl BackendRouter {
         mut req: UnifiedTurnRequest,
         sink: Option<StreamSink>,
         cancel: Option<Arc<Notify>>,
-    ) -> Result<(TurnResult, String, BackendKind, String, Option<String>), String> {
+    ) -> Result<RunTurnOutput, RunTurnError> {
         let (backend, native_id, hint_effort, hint_speed, resolved_qid) =
             self.resolve_target(req.model.as_deref()).await?;
         if req.requested_effort.is_none() {
@@ -598,8 +627,24 @@ impl BackendRouter {
             .map(|e| e.as_str().to_string());
         let kind = backend.kind();
         let bkey = backend.key().to_string();
-        let res = backend.run_turn(&native_id, &req, sink, cancel).await?;
-        Ok((res, bkey, kind, resolved_qid, effective_effort))
+        let blabel = backend.label().to_string();
+        match backend.run_turn(&native_id, &req, sink, cancel).await {
+            Ok(turn) => Ok(RunTurnOutput {
+                turn,
+                backend_key: bkey,
+                backend_label: blabel,
+                backend_kind: kind,
+                resolved_qid,
+                effective_effort,
+            }),
+            Err(message) => Err(RunTurnError {
+                message,
+                backend_key: Some(bkey),
+                backend_label: Some(blabel),
+                resolved_model: Some(native_id),
+                effort: effective_effort,
+            }),
+        }
     }
 
     pub async fn shutdown(&self) {

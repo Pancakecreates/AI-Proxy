@@ -25,6 +25,9 @@ const CLIENT_CAPABILITIES = {
   terminal: false,
 } as const;
 
+/// Пока инструмент выполняется (сборка, тесты), агент законно молчит.
+const TOOL_IDLE_FLOOR_MS = 30 * 60_000;
+
 export class AcpRpcError extends Error {
   readonly code: number;
   readonly data: Record<string, unknown> | undefined;
@@ -51,7 +54,7 @@ export class AcpRpcError extends Error {
 
 interface PendingRpcCall {
   child: ChildProcessWithoutNullStreams;
-  timer: ReturnType<typeof setTimeout>;
+  timer: ReturnType<typeof setTimeout> | undefined;
   resolve: (value: Record<string, unknown>) => void;
   reject: (err: unknown) => void;
 }
@@ -86,6 +89,8 @@ export class AcpClient extends EventEmitter<AcpClientEvents> {
   #initResult: AcpInitializeResult | null = null;
   #stopping = false;
   #permissionMode: DevinMode;
+  #lastActivity = Date.now();
+  readonly #runningTools = new Set<string>();
 
   constructor(config: ProxyConfig, endpoint: AcpEndpointOptions = {}) {
     super();
@@ -219,6 +224,7 @@ export class AcpClient extends EventEmitter<AcpClientEvents> {
 
   #handleMessage(child: ChildProcessWithoutNullStreams, msg: AcpJsonRpcMessage): void {
     if (!msg || typeof msg !== "object") return;
+    this.#lastActivity = Date.now();
 
     if (msg.id !== undefined && msg.method === undefined) {
       const entry = this.#pending.get(msg.id);
@@ -244,8 +250,22 @@ export class AcpClient extends EventEmitter<AcpClientEvents> {
       const sessionId = msg.params.sessionId;
       const update = msg.params.update as AcpSessionUpdate | undefined;
       if (typeof sessionId === "string" && update && typeof update === "object") {
+        this.#trackTool(sessionId, update);
         this.emit("sessionUpdate", { sessionId, update });
       }
+    }
+  }
+
+  #trackTool(sessionId: string, update: AcpSessionUpdate): void {
+    if (update.sessionUpdate !== "tool_call" && update.sessionUpdate !== "tool_call_update") return;
+    const toolId = update.toolCallId;
+    if (!toolId) return;
+    const key = `${sessionId}\u0000${toolId}`;
+    const status = update.status ?? "in_progress";
+    if (status === "pending" || status === "in_progress") {
+      this.#runningTools.add(key);
+    } else {
+      this.#runningTools.delete(key);
     }
   }
 
@@ -293,6 +313,7 @@ export class AcpClient extends EventEmitter<AcpClientEvents> {
     params: Record<string, unknown> = {},
     timeoutMs: number = this.#config.requestTimeoutMs,
     signal?: AbortSignal,
+    idle = false,
   ): Promise<Record<string, unknown>> {
     const child = this.#proc;
     if (!child || child.exitCode !== null || !child.stdin.writable) {
@@ -301,8 +322,10 @@ export class AcpClient extends EventEmitter<AcpClientEvents> {
 
     const id = this.#nextId++;
     return new Promise((resolve, reject) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+
       const cleanup = () => {
-        clearTimeout(timer);
+        if (timer) clearTimeout(timer);
         this.#pending.delete(id);
         signal?.removeEventListener("abort", onAbort);
       };
@@ -312,14 +335,31 @@ export class AcpClient extends EventEmitter<AcpClientEvents> {
         reject(signal?.reason instanceof Error ? signal.reason : new Error("ACP request aborted"));
       };
 
-      const timer = setTimeout(() => {
-        cleanup();
-        reject(new Error(`${this.label} ACP request "${method}" timed out after ${timeoutMs}ms`));
-      }, timeoutMs);
+      const arm = (delay: number) => {
+        timer = setTimeout(() => {
+          if (idle) {
+            const limit = this.#runningTools.size > 0 ? Math.max(timeoutMs, TOOL_IDLE_FLOOR_MS) : timeoutMs;
+            const silent = Date.now() - this.#lastActivity;
+            if (silent < limit) {
+              arm(limit - silent);
+              return;
+            }
+          }
+          cleanup();
+          reject(
+            new Error(
+              idle
+                ? `${this.label} ACP request "${method}" silent for ${timeoutMs}ms`
+                : `${this.label} ACP request "${method}" timed out after ${timeoutMs}ms`,
+            ),
+          );
+        }, delay);
+        const entry = this.#pending.get(id);
+        if (entry) entry.timer = timer;
+      };
 
       if (signal) {
         if (signal.aborted) {
-          clearTimeout(timer);
           reject(signal.reason instanceof Error ? signal.reason : new Error("ACP request aborted"));
           return;
         }
@@ -328,7 +368,7 @@ export class AcpClient extends EventEmitter<AcpClientEvents> {
 
       this.#pending.set(id, {
         child,
-        timer,
+        timer: undefined,
         resolve: (value) => {
           signal?.removeEventListener("abort", onAbort);
           resolve(value);
@@ -340,7 +380,9 @@ export class AcpClient extends EventEmitter<AcpClientEvents> {
       });
 
       try {
+        this.#lastActivity = Date.now();
         this.#writeJson(child, { jsonrpc: "2.0", id, method, params });
+        arm(timeoutMs);
       } catch (err) {
         cleanup();
         reject(err);
@@ -377,6 +419,7 @@ export class AcpClient extends EventEmitter<AcpClientEvents> {
       { sessionId, prompt: promptBlocks },
       options.timeoutMs ?? this.#config.requestTimeoutMs,
       options.signal,
+      true,
     )) as unknown as AcpPromptResult;
   }
 

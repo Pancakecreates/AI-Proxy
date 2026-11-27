@@ -993,3 +993,76 @@ test("Additional OpenBot ACP backends (Copilot, Custom ACP) route via prefix", a
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("ACP prompt timeout counts silence, not total turn duration", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "acp-idle-"));
+  const scriptPath = join(dir, "slow-acp.mjs");
+  writeFileSync(
+    scriptPath,
+    `
+import { createInterface } from "node:readline";
+const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
+const send = (o) => process.stdout.write(JSON.stringify(o) + String.fromCharCode(10));
+rl.on("line", (line) => {
+  if (!line.trim()) return;
+  const msg = JSON.parse(line);
+  if (msg.method === "initialize") {
+    send({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: 1, agentCapabilities: {} } });
+    return;
+  }
+  if (msg.method === "session/prompt") {
+    let ticks = 0;
+    const timer = setInterval(() => {
+      ticks += 1;
+      send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: msg.params.sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "tick " + ticks } } } });
+      if (ticks === 8) {
+        clearInterval(timer);
+        send({ jsonrpc: "2.0", id: msg.id, result: { stopReason: "end_turn", usage: { inputTokens: 3, outputTokens: 8 } } });
+      }
+    }, 100);
+    return;
+  }
+  send({ jsonrpc: "2.0", id: msg.id, result: {} });
+});
+`,
+  );
+
+  const config: ProxyConfig = {
+    help: false,
+    host: "127.0.0.1",
+    port: 0,
+    devinPath: process.execPath,
+    acpArgs: [scriptPath],
+    cwd: dir,
+    mode: "bypass",
+    defaultModel: "swe-2-1-medium",
+    thoughtLevel: null,
+    speed: null,
+    showTools: "thinking",
+    processModel: "in-process",
+    apiKey: "secret-key",
+    modelMap: {},
+    gatewayAliases: true,
+    requestTimeoutMs: 350,
+    startupTimeoutMs: 10_000,
+    idleSessionTtlMs: 60_000,
+    maxSessions: 4,
+    debug: false,
+  };
+
+  const acp = new AcpClient(config, {
+    label: "Slow",
+    executable: process.execPath,
+    args: [scriptPath],
+    supportsCloseSession: false,
+  });
+
+  try {
+    const res = await acp.prompt("sess-slow", [{ type: "text", text: "hi" }]);
+    assert.equal(res.stopReason, "end_turn");
+    assert.equal(res.usage?.outputTokens, 8);
+  } finally {
+    await acp.shutdown();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -18,6 +18,9 @@ import type {
   TurnResult,
 } from "./types.js";
 
+/// Пока инструмент выполняется (сборка, тесты), Codex законно молчит.
+const TOOL_IDLE_FLOOR_MS = 30 * 60_000;
+
 interface CodexPendingCall {
   child: ChildProcessWithoutNullStreams;
   timer: ReturnType<typeof setTimeout>;
@@ -179,6 +182,8 @@ export class CodexBackend extends EventEmitter implements ProxyBackend {
   #readyPromise: Promise<void> | null = null;
   #initialized = false;
   #stopping = false;
+  #lastActivity = Date.now();
+  readonly #runningTools = new Set<string>();
 
   #models: CodexModelRecord[] = [];
   #warmupPromise: Promise<DevinModelEntry[]> | null = null;
@@ -285,6 +290,7 @@ export class CodexBackend extends EventEmitter implements ProxyBackend {
         entry.reject(error);
       }
     }
+    this.#runningTools.clear();
     for (const [threadId, active] of this.#activeTurns) {
       this.#activeTurns.delete(threadId);
       active.reject(error);
@@ -296,6 +302,7 @@ export class CodexBackend extends EventEmitter implements ProxyBackend {
 
   #handleMessage(child: ChildProcessWithoutNullStreams, msg: CodexRpcMessage): void {
     if (!msg || typeof msg !== "object") return;
+    this.#lastActivity = Date.now();
 
     if (msg.id !== undefined && msg.method === undefined) {
       const entry = this.#pending.get(msg.id);
@@ -342,7 +349,22 @@ export class CodexBackend extends EventEmitter implements ProxyBackend {
     }
   }
 
+  #trackToolItem(method: string, params: Record<string, unknown>): void {
+    if (method !== "item/started" && method !== "item/completed") return;
+    const item = asRecord(params.item);
+    if (!item) return;
+    const itemType = asString(item.type);
+    if (!itemType || itemType === "agentMessage" || itemType === "reasoning") return;
+    const key = asString(item.id) ?? itemType;
+    if (method === "item/started") {
+      this.#runningTools.add(key);
+    } else {
+      this.#runningTools.delete(key);
+    }
+  }
+
   #handleNotification(method: string, params: Record<string, unknown>): void {
+    this.#trackToolItem(method, params);
     const threadId = asString(params.threadId);
     if (!threadId) return;
     const active = this.#activeTurns.get(threadId);
@@ -750,18 +772,27 @@ export class CodexBackend extends EventEmitter implements ProxyBackend {
       }
       signal?.addEventListener("abort", onAbort, { once: true });
 
-      const turnStartTimeout = setTimeout(() => {
-        // turn/start RPC itself should return fast; overall turn runs until turn/completed
-      }, this.#config.requestTimeoutMs);
-      clearTimeout(turnStartTimeout);
-
-      const overallTimer = setTimeout(() => {
-        const active = this.#activeTurns.get(thread!.threadId);
-        if (active) {
-          this.#activeTurns.delete(thread!.threadId);
-          active.reject(new Error(`Codex turn timed out after ${this.#config.requestTimeoutMs}ms`));
-        }
-      }, this.#config.requestTimeoutMs);
+      this.#lastActivity = Date.now();
+      let overallTimer: ReturnType<typeof setTimeout> | undefined;
+      const armOverall = (delay: number) => {
+        overallTimer = setTimeout(() => {
+          const limit =
+            this.#runningTools.size > 0
+              ? Math.max(this.#config.requestTimeoutMs, TOOL_IDLE_FLOOR_MS)
+              : this.#config.requestTimeoutMs;
+          const silent = Date.now() - this.#lastActivity;
+          if (silent < limit) {
+            armOverall(limit - silent);
+            return;
+          }
+          const active = this.#activeTurns.get(thread!.threadId);
+          if (active) {
+            this.#activeTurns.delete(thread!.threadId);
+            active.reject(new Error(`Codex turn silent for ${this.#config.requestTimeoutMs}ms`));
+          }
+        }, delay);
+      };
+      armOverall(this.#config.requestTimeoutMs);
 
       try {
         const startRes = await this.#request(
@@ -801,6 +832,7 @@ export class CodexBackend extends EventEmitter implements ProxyBackend {
         clearTimeout(overallTimer);
         signal?.removeEventListener("abort", onAbort);
         this.#activeTurns.delete(thread.threadId);
+        this.#runningTools.clear();
       }
     } catch (err) {
       this.#threads.delete(thread.threadId);

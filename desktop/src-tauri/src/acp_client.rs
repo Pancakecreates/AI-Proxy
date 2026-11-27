@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
@@ -88,11 +88,18 @@ pub struct AcpBackend {
     warmup_lock: Arc<Mutex<()>>,
     last_error: Arc<RwLock<Option<String>>>,
     stopping: AtomicBool,
+    last_msg_ms: Arc<AtomicU64>,
+    tools_in_flight: Arc<AtomicUsize>,
+    running_tools: Arc<Mutex<HashMap<String, ()>>>,
 }
 
 fn now_ms() -> u64 {
     Utc::now().timestamp_millis().max(0) as u64
 }
+
+/// Пока агент выполняет инструмент (сборка, тесты, длинная команда), он
+/// законно не присылает событий. На это время лимит тишины не ниже получаса.
+const TOOL_IDLE_FLOOR_MS: u64 = 30 * 60_000;
 
 pub fn hash_system(text: &str) -> String {
     let mut h = Sha256::new();
@@ -156,6 +163,9 @@ impl AcpBackend {
             warmup_lock: Arc::new(Mutex::new(())),
             last_error: Arc::new(RwLock::new(None)),
             stopping: AtomicBool::new(false),
+            last_msg_ms: Arc::new(AtomicU64::new(0)),
+            tools_in_flight: Arc::new(AtomicUsize::new(0)),
+            running_tools: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -252,6 +262,7 @@ impl AcpBackend {
                 let Ok(msg) = serde_json::from_str::<Value>(trimmed) else {
                     continue;
                 };
+                this.last_msg_ms.store(now_ms(), Ordering::SeqCst);
                 this.handle_incoming(msg).await;
             }
             this.handle_process_exit("ACP stdout closed").await;
@@ -360,12 +371,47 @@ impl AcpBackend {
                     params.get("sessionId").and_then(|s| s.as_str()),
                     params.get("update"),
                 ) {
+                    self.track_tool(sid, update).await;
                     if let Some(tx) = self.session_sinks.lock().await.get(sid).cloned() {
                         let _ = tx.send(update.clone());
                     }
                 }
             }
         }
+    }
+
+    async fn track_tool(&self, session_id: &str, update: &Value) {
+        let kind = update.get("sessionUpdate").and_then(|v| v.as_str()).unwrap_or("");
+        if kind != "tool_call" && kind != "tool_call_update" {
+            return;
+        }
+        let Some(tool_id) = update.get("toolCallId").and_then(|v| v.as_str()) else {
+            return;
+        };
+        let status = update.get("status").and_then(|v| v.as_str()).unwrap_or("in_progress");
+        let key = format!("{session_id}\u{0}{tool_id}");
+        let mut map = self.running_tools.lock().await;
+        match status {
+            "pending" | "in_progress" => {
+                map.insert(key, ());
+            }
+            _ => {
+                map.remove(&key);
+            }
+        }
+        self.tools_in_flight.store(map.len(), Ordering::SeqCst);
+    }
+
+    async fn clear_tools(&self, session_id: Option<&str>) {
+        let mut map = self.running_tools.lock().await;
+        match session_id {
+            Some(sid) => {
+                let prefix = format!("{sid}\u{0}");
+                map.retain(|k, _| !k.starts_with(&prefix));
+            }
+            None => map.clear(),
+        }
+        self.tools_in_flight.store(map.len(), Ordering::SeqCst);
     }
 
     async fn handle_process_exit(&self, reason: &str) {
@@ -378,6 +424,7 @@ impl AcpBackend {
             }
         }
         self.sessions.lock().await.clear();
+        self.clear_tools(None).await;
         let mut pend = self.pending.lock().await;
         for (_, tx) in pend.drain() {
             let _ = tx.send(Err(format!("{} {reason}", self.cfg.label)));
@@ -411,6 +458,73 @@ impl AcpBackend {
             Err(_) => {
                 self.pending.lock().await.remove(&id);
                 Err(format!("{} RPC \"{method}\" таймаут {timeout_ms}мс", self.cfg.label))
+            }
+        }
+    }
+
+    /// Ждёт ответ, считая таймаут по времени молчания, а не по общей длительности.
+    /// Пока агент присылает session/update (текст, размышления, вызовы инструментов),
+    /// запрос живёт; обрывается только если процесс замолчал на idle_ms.
+    async fn rpc_request_idle(&self, method: &str, params: Value, idle_ms: u64) -> Result<Value, String> {
+        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+        let (tx, mut rx) = oneshot::channel();
+        self.pending.lock().await.insert(id, tx);
+
+        self.last_msg_ms.store(now_ms(), Ordering::SeqCst);
+        let line = format!("{}\n", json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }));
+        {
+            let mut st = self.proc_state.lock().await;
+            let Some(stdin) = st.stdin.as_mut() else {
+                self.pending.lock().await.remove(&id);
+                return Err(format!("{} ACP процесс не запущен", self.cfg.label));
+            };
+            if let Err(e) = stdin.write_all(line.as_bytes()).await {
+                self.pending.lock().await.remove(&id);
+                return Err(e.to_string());
+            }
+        }
+
+        let mut last_report = 0u64;
+        loop {
+            match tokio::time::timeout(std::time::Duration::from_millis(1_000), &mut rx).await {
+                Ok(Ok(res)) => return res,
+                Ok(Err(_)) => return Err(format!("{} канал RPC закрыт", self.cfg.label)),
+                Err(_) => {
+                    let busy = self.tools_in_flight.load(Ordering::SeqCst);
+                    let limit = if busy > 0 { idle_ms.max(TOOL_IDLE_FLOOR_MS) } else { idle_ms };
+                    let silent = now_ms().saturating_sub(self.last_msg_ms.load(Ordering::SeqCst));
+                    if silent >= limit {
+                        self.pending.lock().await.remove(&id);
+                        let hint = if busy > 0 {
+                            format!(", инструмент так и не завершился за {} мин", limit / 60_000)
+                        } else {
+                            String::new()
+                        };
+                        return Err(format!(
+                            "{} молчит {} с (\"{method}\"){hint}: похоже, зависло — попробуйте ещё раз",
+                            self.cfg.label,
+                            silent / 1000
+                        ));
+                    }
+                    if silent >= 60_000 && silent / 60_000 > last_report {
+                        last_report = silent / 60_000;
+                        let suffix = if busy > 0 {
+                            format!("; выполняется инструмент, лимит продлён до {} мин", limit / 60_000)
+                        } else {
+                            String::new()
+                        };
+                        (self.log)(
+                            "info",
+                            &format!("acp:{}", self.cfg.key),
+                            &format!(
+                                "{} ждёт ответа {} с: агент не присылает ни текста, ни событий{}",
+                                self.cfg.label,
+                                silent / 1000,
+                                suffix
+                            ),
+                        );
+                    }
+                }
             }
         }
     }
@@ -964,7 +1078,7 @@ impl AcpBackend {
             (assistant_text, thinking_text, input_tokens, output_tokens, measured)
         });
 
-        let prompt_fut = self.rpc_request(
+        let prompt_fut = self.rpc_request_idle(
             "session/prompt",
             json!({ "sessionId": sid_clone, "prompt": blocks }),
             settings.request_timeout_ms,
@@ -983,6 +1097,7 @@ impl AcpBackend {
         };
 
         self.session_sinks.lock().await.remove(&sid_clone);
+        self.clear_tools(Some(&sid_clone)).await;
         let (assistant_text, thinking_text, mut input_tokens, mut output_tokens, mut measured) =
             collector.await.unwrap_or_default();
 

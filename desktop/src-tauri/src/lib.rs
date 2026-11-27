@@ -19,18 +19,73 @@ use crate::discovery::merge_antigravity_accounts;
 use crate::router::BackendRouter;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock as StdRwLock};
+#[cfg(not(target_os = "windows"))]
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter, Manager, WindowEvent};
+use tauri::{
+    AppHandle, Emitter, Manager, PhysicalPosition, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
+    WindowEvent,
+};
 use tauri_plugin_autostart::MacosLauncher;
 use tokio::sync::{Mutex, RwLock};
+
+const TRAY_WIDTH: f64 = 276.0;
+const TRAY_HEIGHT: f64 = 248.0;
+
+#[cfg(target_os = "windows")]
+fn position_and_show_tray_window(
+    app: &AppHandle,
+    win: &WebviewWindow,
+    click_pos: PhysicalPosition<f64>,
+) {
+    let scale = win
+        .current_monitor()
+        .ok()
+        .flatten()
+        .map(|m| m.scale_factor())
+        .unwrap_or(1.0);
+    let win_w = (TRAY_WIDTH * scale).round() as i32;
+    let win_h = (TRAY_HEIGHT * scale).round() as i32;
+
+    let mut x = click_pos.x.round() as i32 - win_w / 2;
+    let mut y = click_pos.y.round() as i32 - win_h - (10.0 * scale).round() as i32;
+
+    if let Ok(monitors) = app.available_monitors() {
+        let target_monitor = monitors.into_iter().find(|m| {
+            let pos = m.position();
+            let sz = m.size();
+            let cx = click_pos.x as i32;
+            let cy = click_pos.y as i32;
+            cx >= pos.x && cx < pos.x + sz.width as i32 && cy >= pos.y && cy < pos.y + sz.height as i32
+        });
+        if let Some(mon) = target_monitor {
+            let wa = mon.work_area();
+            let min_x = wa.position.x + 8;
+            let max_x = wa.position.x + wa.size.width as i32 - win_w - 8;
+            let min_y = wa.position.y + 8;
+            let max_y = wa.position.y + wa.size.height as i32 - win_h - 8;
+            if y < min_y {
+                y = (click_pos.y.round() as i32 + (10.0 * scale).round() as i32).min(max_y);
+            }
+            x = x.clamp(min_x, max_x.max(min_x));
+            y = y.clamp(min_y, max_y.max(min_y));
+        }
+    }
+
+    let _ = win.set_position(PhysicalPosition::new(x, y));
+    let _ = win.show();
+    let _ = win.set_focus();
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app_handle_slot: Arc<StdRwLock<Option<AppHandle>>> = Arc::new(StdRwLock::new(None));
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec!["--minimized"])))
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            Some(vec!["--minimized"]),
+        ))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(move |app| {
@@ -43,8 +98,16 @@ pub fn run() {
             let mut settings = db.load_settings().ok().flatten().unwrap_or_default();
             settings.antigravity_accounts = merge_antigravity_accounts(&settings.antigravity_accounts);
             if settings.api_key.as_deref().map(|k| k.trim().is_empty()).unwrap_or(true) {
-                let raw = format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple());
-                settings.api_key = Some(format!("aipx_{}", &raw[..40]));
+                if let Ok(Some(saved_key)) = db.load_persisted_api_key() {
+                    settings.api_key = Some(saved_key);
+                } else {
+                    let raw = format!(
+                        "{}{}",
+                        uuid::Uuid::new_v4().simple(),
+                        uuid::Uuid::new_v4().simple()
+                    );
+                    settings.api_key = Some(format!("aipx_{}", &raw[..40]));
+                }
             }
             let _ = db.save_settings(&settings);
 
@@ -78,61 +141,137 @@ pub fn run() {
 
             app.manage(state.clone());
 
-            // Build system tray
-            let show_item = MenuItem::with_id(app, "show", "Открыть AI Proxy", true, None::<&str>)?;
-            let toggle_item = MenuItem::with_id(app, "toggle", "Запустить / Остановить прокси", true, None::<&str>)?;
-            let quit_item = MenuItem::with_id(app, "quit", "Выход", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show_item, &toggle_item, &quit_item])?;
+            #[cfg(target_os = "windows")]
+            let _tray_win = WebviewWindowBuilder::new(
+                app,
+                "tray",
+                WebviewUrl::App("index.html?view=tray".into()),
+            )
+            .title("AI Proxy")
+            .inner_size(TRAY_WIDTH, TRAY_HEIGHT)
+            .decorations(false)
+            .transparent(true)
+            .resizable(false)
+            .skip_taskbar(true)
+            .always_on_top(true)
+            .shadow(false)
+            .visible(false)
+            .build()?;
 
             let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png"))?;
-            let state_tray = state.clone();
-            TrayIconBuilder::new()
-                .icon(tray_icon)
-                .tooltip("AI Proxy (Anthropic & OpenAI)")
-                .menu(&menu)
-                .on_menu_event(move |app_h, event| {
-                    let id = event.id().as_ref();
-                    if id == "show" {
-                        if let Some(w) = app_h.get_webview_window("main") {
-                            let _ = w.show();
-                            let _ = w.set_focus();
-                        }
-                    } else if id == "toggle" {
-                        let st = state_tray.clone();
-                        let h = app_h.clone();
-                        tauri::async_runtime::spawn(async move {
-                            let is_running = !st.server_handles.lock().await.is_empty();
-                            if is_running {
-                                st.stop_proxy_internal().await;
-                            } else {
-                                let _ = st.start_proxy_internal(Some(h.clone())).await;
+
+            #[cfg(target_os = "windows")]
+            {
+                let st_tray = state.clone();
+                TrayIconBuilder::new()
+                    .icon(tray_icon)
+                    .tooltip("AI Proxy")
+                    .on_tray_icon_event(move |tray, event| {
+                        if let TrayIconEvent::Click {
+                            button,
+                            button_state: MouseButtonState::Up,
+                            position,
+                            ..
+                        } = event
+                        {
+                            let app_h = tray.app_handle();
+                            match button {
+                                MouseButton::Left => {
+                                    if let Some(t) = app_h.get_webview_window("tray") {
+                                        let _ = t.hide();
+                                    }
+                                    if let Some(w) = app_h.get_webview_window("main") {
+                                        let _ = w.unminimize();
+                                        let _ = w.show();
+                                        let _ = w.set_focus();
+                                    }
+                                }
+                                MouseButton::Right => {
+                                    if let Some(t) = app_h.get_webview_window("tray") {
+                                        if t.is_visible().unwrap_or(false) {
+                                            let _ = t.hide();
+                                        } else {
+                                            let st = st_tray.clone();
+                                            let h = app_h.clone();
+                                            tauri::async_runtime::spawn(async move {
+                                                let _ = h.emit("proxy-status-updated", &st.runtime_status().await);
+                                            });
+                                            position_and_show_tray_window(app_h, &t, position);
+                                        }
+                                    }
+                                }
+                                _ => {}
                             }
-                            let _ = h.emit("proxy-status-updated", &st.runtime_status().await);
-                        });
-                    } else if id == "quit" {
-                        let st = state_tray.clone();
-                        let h = app_h.clone();
-                        tauri::async_runtime::spawn(async move {
-                            st.stop_proxy_internal().await;
-                            h.exit(0);
-                        });
-                    }
-                })
-                .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        button_state: MouseButtonState::Up,
-                        ..
-                    } = event
-                    {
-                        let app_h = tray.app_handle();
-                        if let Some(w) = app_h.get_webview_window("main") {
-                            let _ = w.show();
-                            let _ = w.set_focus();
                         }
-                    }
-                })
-                .build(app)?;
+                    })
+                    .build(app)?;
+            }
+
+            #[cfg(not(target_os = "windows"))]
+            {
+                let initial_toggle_label = if settings.auto_start_proxy {
+                    "Остановить прокси"
+                } else {
+                    "Запустить прокси"
+                };
+                let show_item = MenuItem::with_id(app, "show", "Открыть AI Proxy", true, None::<&str>)?;
+                let toggle_item = MenuItem::with_id(app, "toggle", initial_toggle_label, true, None::<&str>)?;
+                let quit_item = MenuItem::with_id(app, "quit", "Выход", true, None::<&str>)?;
+                let menu = Menu::with_items(app, &[&show_item, &toggle_item, &quit_item])?;
+
+                let state_tray = state.clone();
+                let toggle_item_handle = toggle_item.clone();
+                TrayIconBuilder::new()
+                    .icon(tray_icon)
+                    .tooltip("AI Proxy")
+                    .menu(&menu)
+                    .on_menu_event(move |app_h, event| {
+                        let id = event.id().as_ref();
+                        if id == "show" {
+                            if let Some(w) = app_h.get_webview_window("main") {
+                                let _ = w.show();
+                                let _ = w.set_focus();
+                            }
+                        } else if id == "toggle" {
+                            let st = state_tray.clone();
+                            let h = app_h.clone();
+                            let toggle_ref = toggle_item_handle.clone();
+                            tauri::async_runtime::spawn(async move {
+                                let is_running = !st.server_handles.lock().await.is_empty();
+                                if is_running {
+                                    st.stop_proxy_internal().await;
+                                    let _ = toggle_ref.set_text("Запустить прокси");
+                                } else {
+                                    let _ = st.start_proxy_internal(Some(h.clone())).await;
+                                    let _ = toggle_ref.set_text("Остановить прокси");
+                                }
+                                let _ = h.emit("proxy-status-updated", &st.runtime_status().await);
+                            });
+                        } else if id == "quit" {
+                            let st = state_tray.clone();
+                            let h = app_h.clone();
+                            tauri::async_runtime::spawn(async move {
+                                st.stop_proxy_internal().await;
+                                h.exit(0);
+                            });
+                        }
+                    })
+                    .on_tray_icon_event(|tray, event| {
+                        if let TrayIconEvent::Click {
+                            button: MouseButton::Left,
+                            button_state: MouseButtonState::Up,
+                            ..
+                        } = event
+                        {
+                            let app_h = tray.app_handle();
+                            if let Some(w) = app_h.get_webview_window("main") {
+                                let _ = w.show();
+                                let _ = w.set_focus();
+                            }
+                        }
+                    })
+                    .build(app)?;
+            }
 
             // Auto-start HTTP proxy if configured
             if settings.auto_start_proxy {
@@ -146,6 +285,20 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            if window.label() == "tray" {
+                match event {
+                    WindowEvent::Focused(false) => {
+                        let _ = window.hide();
+                    }
+                    WindowEvent::CloseRequested { api, .. } => {
+                        api.prevent_close();
+                        let _ = window.hide();
+                    }
+                    _ => {}
+                }
+                return;
+            }
+
             if let WindowEvent::CloseRequested { api, .. } = event {
                 let state = window.state::<Arc<AppState>>().inner().clone();
                 let minimize_to_tray = tauri::async_runtime::block_on(async {
@@ -190,10 +343,11 @@ pub fn run() {
             commands::set_autostart,
             commands::get_autostart,
             commands::hide_main_window,
+            commands::show_main_window,
+            commands::quit_app,
             commands::check_app_update,
             commands::download_and_launch_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
-

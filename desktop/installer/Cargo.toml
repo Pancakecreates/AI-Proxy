@@ -1,0 +1,22 @@
+[package]
+name = "ai-proxy-setup"
+version = "0.2.2"
+edition = "2021"
+description = "Custom setup wizard for AI Proxy Desktop"
+
+[dependencies]
+tao = "0.37"
+wry = "0.57"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dirs = "6"
+
+[target.'cfg(windows)'.build-dependencies]
+tauri-winres = "0.3"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

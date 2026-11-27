@@ -4,7 +4,7 @@ use crate::models::{
     format_anthropic_models_list, format_openai_models_list, normalize_effort_value,
 };
 use crate::pricing::{calculate_costs, estimate_tokens_from_chars};
-use crate::router::BackendRouter;
+use crate::router::{BackendRouter, RunTurnError};
 use crate::types::{
     AppSettings, ImageAttachment, NormalizedMessage, RequestLogEntry, UnifiedTurnRequest,
 };
@@ -83,6 +83,46 @@ fn openai_error(status: StatusCode, err_type: &str, message: &str) -> Response {
         })),
     )
         .into_response()
+}
+
+fn record_turn_error(
+    state: &HttpSharedState,
+    request_id: String,
+    protocol: &str,
+    path: String,
+    model: String,
+    latency_ms: u64,
+    est_in_chars: usize,
+    prompt_preview: Option<String>,
+    err: &RunTurnError,
+) {
+    record_request_log(
+        state,
+        RequestLogEntry {
+            id: 0,
+            created_at: Utc::now().to_rfc3339(),
+            request_id,
+            protocol: protocol.into(),
+            method: "POST".into(),
+            path,
+            model,
+            resolved_model: err.resolved_model.clone(),
+            effort: err.effort.clone(),
+            backend_key: err.backend_key.clone(),
+            account_label: err.backend_label.clone(),
+            status: 502,
+            latency_ms,
+            input_tokens: estimate_tokens_from_chars(est_in_chars),
+            output_tokens: 0,
+            thinking_tokens: 0,
+            usage_source: "estimated".into(),
+            cost_usd: 0.0,
+            api_equivalent_usd: 0.0,
+            error: Some(err.message.clone()),
+            prompt_preview,
+            response_preview: None,
+        },
+    );
 }
 
 fn extract_anthropic_system(val: Option<&Value>) -> String {
@@ -379,7 +419,12 @@ async fn anthropic_messages_handler(
 
     if !is_stream {
         match state.router.run_turn(unified, None, None).await {
-            Ok((res, bkey, bkind, _resolved_qid, eff)) => {
+            Ok(out) => {
+                let res = out.turn;
+                let bkey = out.backend_key;
+                let blabel = out.backend_label;
+                let bkind = out.backend_kind;
+                let eff = out.effective_effort;
                 let mut content = Vec::new();
                 if !thinking_disabled && !res.thinking_text.is_empty() {
                     content.push(json!({ "type": "thinking", "thinking": res.thinking_text, "signature": "devin-acp" }));
@@ -412,8 +457,10 @@ async fn anthropic_messages_handler(
                         method: "POST".into(),
                         path: path_str,
                         model: model_label.clone(),
-                        resolved_model: Some(res.model_id.clone()), effort: eff.clone(),
+                        resolved_model: Some(res.model_id.clone()),
+                        effort: eff.clone(),
                         backend_key: Some(bkey),
+                        account_label: Some(blabel),
                         status: 200,
                         latency_ms: start.elapsed().as_millis() as u64,
                         input_tokens: in_tok,
@@ -441,32 +488,18 @@ async fn anthropic_messages_handler(
                 .into_response()
             }
             Err(err) => {
-                record_request_log(
+                record_turn_error(
                     &state,
-                    RequestLogEntry {
-                        id: 0,
-                        created_at: Utc::now().to_rfc3339(),
-                        request_id: req_id,
-                        protocol: "anthropic".into(),
-                        method: "POST".into(),
-                        path: path_str,
-                        model: model_label,
-                        resolved_model: None, effort: None,
-                        backend_key: None,
-                        status: 502,
-                        latency_ms: start.elapsed().as_millis() as u64,
-                        input_tokens: estimate_tokens_from_chars(est_in_chars),
-                        output_tokens: 0,
-                        thinking_tokens: 0,
-                        usage_source: "estimated".into(),
-                        cost_usd: 0.0,
-                        api_equivalent_usd: 0.0,
-                        error: Some(err.clone()),
-                        prompt_preview,
-                        response_preview: None,
-                    },
+                    req_id,
+                    "anthropic",
+                    path_str,
+                    model_label,
+                    start.elapsed().as_millis() as u64,
+                    est_in_chars,
+                    prompt_preview,
+                    &err,
                 );
-                anthropic_error(StatusCode::BAD_GATEWAY, "api_error", &err)
+                anthropic_error(StatusCode::BAD_GATEWAY, "api_error", &err.message)
             }
         }
     } else {
@@ -513,6 +546,9 @@ async fn anthropic_messages_handler(
             let mut emitted_text = false;
             let mut latest_in = 0u64;
             let mut latest_out = 0u64;
+            let mut keepalive = tokio::time::interval(std::time::Duration::from_secs(15));
+            keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            keepalive.tick().await;
 
             let close_block = |sse_tx: &mpsc::UnboundedSender<Result<Event, Infallible>>,
                                active_type: &mut Option<&'static str>,
@@ -567,6 +603,11 @@ async fn anthropic_messages_handler(
             loop {
                 tokio::select! {
                     biased;
+                    _ = keepalive.tick() => {
+                        let _ = sse_tx.send(Ok(Event::default().event("ping").data(
+                            json!({ "type": "ping" }).to_string(),
+                        )));
+                    }
                     ev = rx.recv(), if rx_open => {
                         match ev {
                             Some(StreamEvent::Thinking(chunk)) if !thinking_disabled && !chunk.is_empty() => {
@@ -638,7 +679,12 @@ async fn anthropic_messages_handler(
             }
 
             match turn_result.unwrap() {
-                Ok((res, bkey, bkind, _resolved_qid, eff)) => {
+                Ok(out) => {
+                    let res = out.turn;
+                    let bkey = out.backend_key;
+                    let blabel = out.backend_label;
+                    let bkind = out.backend_kind;
+                    let eff = out.effective_effort;
                     if !emitted_text && next_idx == 0 {
                         ensure_block("text", &sse_tx, &mut next_idx, &mut active_type, &mut active_idx);
                         let _ = sse_tx.send(Ok(Event::default().event("content_block_delta").data(
@@ -688,8 +734,10 @@ async fn anthropic_messages_handler(
                             method: "POST".into(),
                             path: path_bg,
                             model: model_label_bg,
-                            resolved_model: Some(res.model_id.clone()), effort: eff.clone(),
+                            resolved_model: Some(res.model_id.clone()),
+                            effort: eff.clone(),
                             backend_key: Some(bkey),
+                            account_label: Some(blabel),
                             status: 200,
                             latency_ms: start.elapsed().as_millis() as u64,
                             input_tokens: in_tok,
@@ -707,32 +755,18 @@ async fn anthropic_messages_handler(
                 Err(err) => {
                     close_block(&sse_tx, &mut active_type, active_idx);
                     let _ = sse_tx.send(Ok(Event::default().event("error").data(
-                        json!({ "type": "error", "error": { "type": "api_error", "message": err } }).to_string()
+                        json!({ "type": "error", "error": { "type": "api_error", "message": err.message } }).to_string()
                     )));
-                    record_request_log(
+                    record_turn_error(
                         &state_bg,
-                        RequestLogEntry {
-                            id: 0,
-                            created_at: Utc::now().to_rfc3339(),
-                            request_id: req_id_bg,
-                            protocol: "anthropic".into(),
-                            method: "POST".into(),
-                            path: path_bg,
-                            model: model_label_bg,
-                            resolved_model: None, effort: None,
-                            backend_key: None,
-                            status: 502,
-                            latency_ms: start.elapsed().as_millis() as u64,
-                            input_tokens: estimate_tokens_from_chars(est_in_chars),
-                            output_tokens: 0,
-                            thinking_tokens: 0,
-                            usage_source: "estimated".into(),
-                            cost_usd: 0.0,
-                            api_equivalent_usd: 0.0,
-                            error: Some(err),
-                            prompt_preview: prompt_bg,
-                            response_preview: None,
-                        },
+                        req_id_bg,
+                        "anthropic",
+                        path_bg,
+                        model_label_bg,
+                        start.elapsed().as_millis() as u64,
+                        est_in_chars,
+                        prompt_bg,
+                        &err,
                     );
                 }
             }
@@ -814,7 +848,13 @@ async fn openai_chat_handler(
 
     if !is_stream {
         match state.router.run_turn(unified, None, None).await {
-            Ok((res, bkey, bkind, resolved_qid, eff)) => {
+            Ok(out) => {
+                let res = out.turn;
+                let bkey = out.backend_key;
+                let blabel = out.backend_label;
+                let bkind = out.backend_kind;
+                let resolved_qid = out.resolved_qid;
+                let eff = out.effective_effort;
                 let in_tok = if res.usage.input_tokens > 0 { res.usage.input_tokens } else { estimate_tokens_from_chars(est_in_chars) };
                 let out_tok = if res.usage.output_tokens > 0 { res.usage.output_tokens } else { estimate_tokens_from_chars(res.assistant_text.len() + res.thinking_text.len()) };
                 let (cost_usd, eq_usd) = calculate_costs(&s, bkind, &res.model_id, in_tok, out_tok);
@@ -829,8 +869,10 @@ async fn openai_chat_handler(
                         method: "POST".into(),
                         path: path_str,
                         model: model_label,
-                        resolved_model: Some(res.model_id.clone()), effort: eff.clone(),
+                        resolved_model: Some(res.model_id.clone()),
+                        effort: eff.clone(),
                         backend_key: Some(bkey),
+                        account_label: Some(blabel),
                         status: 200,
                         latency_ms: start.elapsed().as_millis() as u64,
                         input_tokens: in_tok,
@@ -872,32 +914,18 @@ async fn openai_chat_handler(
                 .into_response()
             }
             Err(err) => {
-                record_request_log(
+                record_turn_error(
                     &state,
-                    RequestLogEntry {
-                        id: 0,
-                        created_at: Utc::now().to_rfc3339(),
-                        request_id: req_id,
-                        protocol: "openai-chat".into(),
-                        method: "POST".into(),
-                        path: path_str,
-                        model: model_label,
-                        resolved_model: None, effort: None,
-                        backend_key: None,
-                        status: 502,
-                        latency_ms: start.elapsed().as_millis() as u64,
-                        input_tokens: estimate_tokens_from_chars(est_in_chars),
-                        output_tokens: 0,
-                        thinking_tokens: 0,
-                        usage_source: "estimated".into(),
-                        cost_usd: 0.0,
-                        api_equivalent_usd: 0.0,
-                        error: Some(err.clone()),
-                        prompt_preview,
-                        response_preview: None,
-                    },
+                    req_id,
+                    "openai-chat",
+                    path_str,
+                    model_label,
+                    start.elapsed().as_millis() as u64,
+                    est_in_chars,
+                    prompt_preview,
+                    &err,
                 );
-                openai_error(StatusCode::BAD_GATEWAY, "server_error", &err)
+                openai_error(StatusCode::BAD_GATEWAY, "server_error", &err.message)
             }
         }
     } else {
@@ -916,6 +944,9 @@ async fn openai_chat_handler(
             tokio::pin!(router_fut);
             let mut latest_in = 0u64;
             let mut latest_out = 0u64;
+            let mut keepalive = tokio::time::interval(std::time::Duration::from_secs(15));
+            keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            keepalive.tick().await;
             let mut rx_open = true;
             let turn_result;
 
@@ -932,6 +963,9 @@ async fn openai_chat_handler(
             loop {
                 tokio::select! {
                     biased;
+                    _ = keepalive.tick() => {
+                        let _ = sse_tx.send(Ok(Event::default().comment("keepalive")));
+                    }
                     ev = rx.recv(), if rx_open => {
                         match ev {
                             Some(StreamEvent::Thinking(chunk)) if !chunk.is_empty() => {
@@ -988,7 +1022,13 @@ async fn openai_chat_handler(
             }
 
             match turn_result.unwrap() {
-                Ok((res, bkey, bkind, resolved_qid, eff)) => {
+                Ok(out) => {
+                    let res = out.turn;
+                    let bkey = out.backend_key;
+                    let blabel = out.backend_label;
+                    let bkind = out.backend_kind;
+                    let resolved_qid = out.resolved_qid;
+                    let eff = out.effective_effort;
                     let in_tok = if res.usage.input_tokens > 0 { res.usage.input_tokens } else if latest_in > 0 { latest_in } else { estimate_tokens_from_chars(est_in_chars) };
                     let out_tok = if res.usage.output_tokens > 0 { res.usage.output_tokens } else if latest_out > 0 { latest_out } else { estimate_tokens_from_chars(res.assistant_text.len() + res.thinking_text.len()) };
                     let (cost_usd, eq_usd) = calculate_costs(&settings_bg, bkind, &res.model_id, in_tok, out_tok);
@@ -1015,8 +1055,10 @@ async fn openai_chat_handler(
                             method: "POST".into(),
                             path: path_bg,
                             model: model_label_bg,
-                            resolved_model: Some(res.model_id.clone()), effort: eff.clone(),
+                            resolved_model: Some(res.model_id.clone()),
+                            effort: eff.clone(),
                             backend_key: Some(bkey),
+                            account_label: Some(blabel),
                             status: 200,
                             latency_ms: start.elapsed().as_millis() as u64,
                             input_tokens: in_tok,
@@ -1033,33 +1075,19 @@ async fn openai_chat_handler(
                 }
                 Err(err) => {
                     let _ = sse_tx.send(Ok(Event::default().data(
-                        json!({ "error": { "message": err, "type": "server_error" } }).to_string()
+                        json!({ "error": { "message": err.message, "type": "server_error" } }).to_string()
                     )));
                     let _ = sse_tx.send(Ok(Event::default().data("[DONE]")));
-                    record_request_log(
+                    record_turn_error(
                         &state_bg,
-                        RequestLogEntry {
-                            id: 0,
-                            created_at: Utc::now().to_rfc3339(),
-                            request_id: req_id_bg,
-                            protocol: "openai-chat".into(),
-                            method: "POST".into(),
-                            path: path_bg,
-                            model: model_label_bg,
-                            resolved_model: None, effort: None,
-                            backend_key: None,
-                            status: 502,
-                            latency_ms: start.elapsed().as_millis() as u64,
-                            input_tokens: estimate_tokens_from_chars(est_in_chars),
-                            output_tokens: 0,
-                            thinking_tokens: 0,
-                            usage_source: "estimated".into(),
-                            cost_usd: 0.0,
-                            api_equivalent_usd: 0.0,
-                            error: Some(err),
-                            prompt_preview: prompt_bg,
-                            response_preview: None,
-                        },
+                        req_id_bg,
+                        "openai-chat",
+                        path_bg,
+                        model_label_bg,
+                        start.elapsed().as_millis() as u64,
+                        est_in_chars,
+                        prompt_bg,
+                        &err,
                     );
                 }
             }
@@ -1164,7 +1192,13 @@ async fn openai_responses_handler(
 
     if !is_stream {
         match state.router.run_turn(unified, None, None).await {
-            Ok((res, bkey, bkind, resolved_qid, eff)) => {
+            Ok(out) => {
+                let res = out.turn;
+                let bkey = out.backend_key;
+                let blabel = out.backend_label;
+                let bkind = out.backend_kind;
+                let resolved_qid = out.resolved_qid;
+                let eff = out.effective_effort;
                 let in_tok = if res.usage.input_tokens > 0 { res.usage.input_tokens } else { estimate_tokens_from_chars(est_in_chars) };
                 let out_tok = if res.usage.output_tokens > 0 { res.usage.output_tokens } else { estimate_tokens_from_chars(res.assistant_text.len() + res.thinking_text.len()) };
                 let (cost_usd, eq_usd) = calculate_costs(&s, bkind, &res.model_id, in_tok, out_tok);
@@ -1179,8 +1213,10 @@ async fn openai_responses_handler(
                         method: "POST".into(),
                         path: path_str,
                         model: model_label,
-                        resolved_model: Some(res.model_id.clone()), effort: eff.clone(),
+                        resolved_model: Some(res.model_id.clone()),
+                        effort: eff.clone(),
                         backend_key: Some(bkey),
+                        account_label: Some(blabel),
                         status: 200,
                         latency_ms: start.elapsed().as_millis() as u64,
                         input_tokens: in_tok,
@@ -1221,7 +1257,20 @@ async fn openai_responses_handler(
                 }))
                 .into_response()
             }
-            Err(err) => openai_error(StatusCode::BAD_GATEWAY, "server_error", &err),
+            Err(err) => {
+                record_turn_error(
+                    &state,
+                    resp_id,
+                    "openai-responses",
+                    path_str,
+                    model_label,
+                    start.elapsed().as_millis() as u64,
+                    est_in_chars,
+                    prompt_preview,
+                    &err,
+                );
+                openai_error(StatusCode::BAD_GATEWAY, "server_error", &err.message)
+            }
         }
     } else {
         let (tx, mut rx) = mpsc::unbounded_channel::<StreamEvent>();
@@ -1261,12 +1310,18 @@ async fn openai_responses_handler(
             tokio::pin!(router_fut);
             let mut latest_in = 0u64;
             let mut latest_out = 0u64;
+            let mut keepalive = tokio::time::interval(std::time::Duration::from_secs(15));
+            keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            keepalive.tick().await;
             let mut rx_open = true;
             let turn_result;
 
             loop {
                 tokio::select! {
                     biased;
+                    _ = keepalive.tick() => {
+                        let _ = sse_tx.send(Ok(Event::default().comment("keepalive")));
+                    }
                     ev = rx.recv(), if rx_open => {
                         match ev {
                             Some(StreamEvent::Thinking(chunk)) if !chunk.is_empty() => {
@@ -1314,7 +1369,13 @@ async fn openai_responses_handler(
             }
 
             match turn_result.unwrap() {
-                Ok((res, bkey, bkind, resolved_qid, eff)) => {
+                Ok(out) => {
+                    let res = out.turn;
+                    let bkey = out.backend_key;
+                    let blabel = out.backend_label;
+                    let bkind = out.backend_kind;
+                    let resolved_qid = out.resolved_qid;
+                    let eff = out.effective_effort;
                     let in_tok = if res.usage.input_tokens > 0 { res.usage.input_tokens } else if latest_in > 0 { latest_in } else { estimate_tokens_from_chars(est_in_chars) };
                     let out_tok = if res.usage.output_tokens > 0 { res.usage.output_tokens } else if latest_out > 0 { latest_out } else { estimate_tokens_from_chars(res.assistant_text.len() + res.thinking_text.len()) };
                     let (cost_usd, eq_usd) = calculate_costs(&settings_bg, bkind, &res.model_id, in_tok, out_tok);
@@ -1355,8 +1416,10 @@ async fn openai_responses_handler(
                             method: "POST".into(),
                             path: path_bg,
                             model: model_label_bg,
-                            resolved_model: Some(res.model_id.clone()), effort: eff.clone(),
+                            resolved_model: Some(res.model_id.clone()),
+                            effort: eff.clone(),
                             backend_key: Some(bkey),
+                            account_label: Some(blabel),
                             status: 200,
                             latency_ms: start.elapsed().as_millis() as u64,
                             input_tokens: in_tok,
@@ -1374,8 +1437,19 @@ async fn openai_responses_handler(
                 Err(err) => {
                     emit("response.failed", json!({
                         "type": "response.failed",
-                        "response": { "id": resp_id_bg, "status": "failed", "error": { "message": err } }
+                        "response": { "id": resp_id_bg, "status": "failed", "error": { "message": err.message } }
                     }));
+                    record_turn_error(
+                        &state_bg,
+                        resp_id_bg,
+                        "openai-responses",
+                        path_bg,
+                        model_label_bg,
+                        start.elapsed().as_millis() as u64,
+                        est_in_chars,
+                        prompt_bg,
+                        &err,
+                    );
                 }
             }
         });

@@ -39,6 +39,7 @@ impl AppDb {
                 resolved_model TEXT,
                 effort TEXT,
                 backend_key TEXT,
+                account_label TEXT,
                 status INTEGER NOT NULL,
                 latency_ms INTEGER NOT NULL,
                 input_tokens INTEGER NOT NULL,
@@ -98,6 +99,7 @@ impl AppDb {
         .map_err(|e| e.to_string())?;
 
         let _ = conn.execute("ALTER TABLE request_logs ADD COLUMN effort TEXT", []);
+        let _ = conn.execute("ALTER TABLE request_logs ADD COLUMN account_label TEXT", []);
 
         Ok(Self { conn: Mutex::new(conn) })
     }
@@ -110,8 +112,45 @@ impl AppDb {
         let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
         if let Some(row) = rows.next().map_err(|e| e.to_string())? {
             let json_str: String = row.get(0).map_err(|e| e.to_string())?;
-            let parsed: AppSettings = serde_json::from_str(&json_str).map_err(|e| e.to_string())?;
-            return Ok(Some(parsed));
+            match serde_json::from_str::<AppSettings>(&json_str) {
+                Ok(parsed) => return Ok(Some(parsed)),
+                Err(err) => {
+                    // Recover critical fields (such as apiKey) if an older/newer payload fails strict parsing
+                    let mut recovered = AppSettings::default();
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&json_str) {
+                        if let Some(k) = val.get("apiKey").and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty()) {
+                            recovered.api_key = Some(k.to_string());
+                        }
+                        if let Some(h) = val.get("host").and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty()) {
+                            recovered.host = h.to_string();
+                        }
+                        if let Some(p) = val.get("anthropicPort").and_then(|v| v.as_u64()) {
+                            recovered.anthropic_port = p as u16;
+                        }
+                        if let Some(p) = val.get("openaiPort").and_then(|v| v.as_u64()) {
+                            recovered.openai_port = p as u16;
+                        }
+                    }
+                    eprintln!("Warning: partial settings recovery after parse error: {err}");
+                    return Ok(Some(recovered));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    pub fn load_persisted_api_key(&self) -> Result<Option<String>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare("SELECT value FROM settings WHERE key = 'api_key'")
+            .map_err(|e| e.to_string())?;
+        let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
+        if let Some(row) = rows.next().map_err(|e| e.to_string())? {
+            let val: String = row.get(0).map_err(|e| e.to_string())?;
+            let trimmed = val.trim().to_string();
+            if !trimmed.is_empty() {
+                return Ok(Some(trimmed));
+            }
         }
         Ok(None)
     }
@@ -125,6 +164,14 @@ impl AppDb {
             params![json_str],
         )
         .map_err(|e| e.to_string())?;
+        if let Some(key) = settings.api_key.as_deref().map(|k| k.trim()).filter(|k| !k.is_empty()) {
+            conn.execute(
+                "INSERT INTO settings (key, value) VALUES ('api_key', ?1)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![key],
+            )
+            .map_err(|e| e.to_string())?;
+        }
         Ok(())
     }
 
@@ -133,9 +180,9 @@ impl AppDb {
         conn.execute(
             "INSERT INTO request_logs (
                 created_at, request_id, protocol, method, path, model, resolved_model, effort,
-                backend_key, status, latency_ms, input_tokens, output_tokens, thinking_tokens,
+                backend_key, account_label, status, latency_ms, input_tokens, output_tokens, thinking_tokens,
                 usage_source, cost_usd, api_equivalent_usd, error, prompt_preview, response_preview
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
             params![
                 entry.created_at,
                 entry.request_id,
@@ -146,6 +193,7 @@ impl AppDb {
                 entry.resolved_model,
                 entry.effort,
                 entry.backend_key,
+                entry.account_label,
                 entry.status as i64,
                 entry.latency_ms as i64,
                 entry.input_tokens as i64,
@@ -174,16 +222,17 @@ impl AppDb {
 
         let sql = if q.is_some() {
             "SELECT id, created_at, request_id, protocol, method, path, model, resolved_model, effort,
-                    backend_key, status, latency_ms, input_tokens, output_tokens, thinking_tokens,
+                    backend_key, account_label, status, latency_ms, input_tokens, output_tokens, thinking_tokens,
                     usage_source, cost_usd, api_equivalent_usd, error, prompt_preview, response_preview
              FROM request_logs
              WHERE lower(model) LIKE ?1 OR lower(coalesce(resolved_model,'')) LIKE ?1
-                OR lower(coalesce(backend_key,'')) LIKE ?1 OR lower(coalesce(error,'')) LIKE ?1
+                OR lower(coalesce(backend_key,'')) LIKE ?1 OR lower(coalesce(account_label,'')) LIKE ?1
+                OR lower(coalesce(error,'')) LIKE ?1
                 OR lower(coalesce(prompt_preview,'')) LIKE ?1 OR lower(coalesce(effort,'')) LIKE ?1
              ORDER BY id DESC LIMIT ?2"
         } else {
             "SELECT id, created_at, request_id, protocol, method, path, model, resolved_model, effort,
-                    backend_key, status, latency_ms, input_tokens, output_tokens, thinking_tokens,
+                    backend_key, account_label, status, latency_ms, input_tokens, output_tokens, thinking_tokens,
                     usage_source, cost_usd, api_equivalent_usd, error, prompt_preview, response_preview
              FROM request_logs
              ORDER BY id DESC LIMIT ?1"
@@ -202,17 +251,18 @@ impl AppDb {
                 resolved_model: row.get(7)?,
                 effort: row.get(8)?,
                 backend_key: row.get(9)?,
-                status: row.get::<_, i64>(10)? as u16,
-                latency_ms: row.get::<_, i64>(11)? as u64,
-                input_tokens: row.get::<_, i64>(12)? as u64,
-                output_tokens: row.get::<_, i64>(13)? as u64,
-                thinking_tokens: row.get::<_, i64>(14)? as u64,
-                usage_source: row.get(15)?,
-                cost_usd: row.get(16)?,
-                api_equivalent_usd: row.get(17)?,
-                error: row.get(18)?,
-                prompt_preview: row.get(19)?,
-                response_preview: row.get(20)?,
+                account_label: row.get(10)?,
+                status: row.get::<_, i64>(11)? as u16,
+                latency_ms: row.get::<_, i64>(12)? as u64,
+                input_tokens: row.get::<_, i64>(13)? as u64,
+                output_tokens: row.get::<_, i64>(14)? as u64,
+                thinking_tokens: row.get::<_, i64>(15)? as u64,
+                usage_source: row.get(16)?,
+                cost_usd: row.get(17)?,
+                api_equivalent_usd: row.get(18)?,
+                error: row.get(19)?,
+                prompt_preview: row.get(20)?,
+                response_preview: row.get(21)?,
             })
         };
 
@@ -593,5 +643,44 @@ impl AppDb {
         )
         .map_err(|e| e.to_string())?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settings_preserve_api_key_across_partial_or_legacy_json() {
+        let dir = std::env::temp_dir().join(format!("ai_proxy_db_test_{}", uuid::Uuid::new_v4()));
+        let db = AppDb::open(&dir.join("proxy.db")).unwrap();
+
+        let mut s = AppSettings::default();
+        s.api_key = Some("aipx_persistent_test_token_123456".to_string());
+        db.save_settings(&s).unwrap();
+
+        assert_eq!(
+            db.load_persisted_api_key().unwrap().as_deref(),
+            Some("aipx_persistent_test_token_123456")
+        );
+
+        // Simulate legacy JSON missing newer fields
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE settings SET value = ?1 WHERE key = 'app_settings'",
+                params![r#"{"host":"127.0.0.1","anthropicPort":9001,"apiKey":"aipx_persistent_test_token_123456"}"#],
+            )
+            .unwrap();
+        }
+
+        let loaded = db.load_settings().unwrap().unwrap();
+        assert_eq!(loaded.anthropic_port, 9001);
+        assert_eq!(
+            loaded.api_key.as_deref(),
+            Some("aipx_persistent_test_token_123456")
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

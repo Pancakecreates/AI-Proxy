@@ -1,0 +1,567 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Установка AI Proxy</title>
+  <style>
+    :root {
+      --bg: oklch(0.145 0.005 260);
+      --bg-elevated: oklch(0.178 0.005 260);
+      --bg-subtle: oklch(0.218 0.006 260);
+      --border: oklch(0.275 0.006 260);
+      --border-strong: oklch(0.345 0.008 260);
+      --fg: oklch(0.955 0.003 260);
+      --fg-muted: oklch(0.715 0.008 260);
+      --fg-subtle: oklch(0.55 0.008 260);
+      --accent: oklch(0.665 0.155 42);
+      --accent-fg: oklch(0.99 0.002 42);
+      --accent-soft: oklch(0.665 0.155 42 / 0.14);
+      --success: oklch(0.71 0.165 152);
+      --success-soft: oklch(0.71 0.165 152 / 0.14);
+      --danger: oklch(0.67 0.195 25);
+      --danger-soft: oklch(0.67 0.195 25 / 0.14);
+    }
+
+    * {
+      box-sizing: border-box;
+      user-select: none;
+    }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: transparent;
+      color: var(--fg);
+      font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .shell {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      background: var(--bg);
+      border: 1px solid var(--border-strong);
+      border-radius: 14px;
+      overflow: hidden;
+    }
+
+    .titlebar {
+      height: 40px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 6px 0 14px;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg-elevated);
+      cursor: default;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      font-size: 12.5px;
+      font-weight: 600;
+      letter-spacing: -0.015em;
+      pointer-events: none;
+    }
+
+    .brand-mark {
+      width: 22px;
+      height: 22px;
+      border-radius: 6px;
+      background: var(--bg-subtle);
+      border: 1px solid var(--border-strong);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .ver-pill {
+      font-family: inherit;
+      font-size: 10.5px;
+      font-weight: 500;
+      padding: 2px 7px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      border: 1px solid oklch(0.665 0.155 42 / 0.3);
+    }
+
+    .win-controls {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+    }
+
+    .win-btn {
+      width: 30px;
+      height: 28px;
+      border: none;
+      border-radius: 7px;
+      background: transparent;
+      color: var(--fg-muted);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: background-color 0.12s, color 0.12s;
+    }
+
+    .win-btn:hover {
+      background: var(--bg-subtle);
+      color: var(--fg);
+    }
+
+    .win-btn.close:hover {
+      background: #e81123;
+      color: #fff;
+    }
+
+    .body {
+      flex: 1;
+      padding: 22px 24px 20px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
+    .hero h1 {
+      margin: 0;
+      font-size: 20px;
+      font-weight: 600;
+      letter-spacing: -0.025em;
+      line-height: 1.25;
+    }
+
+    .hero p {
+      margin: 6px 0 0;
+      font-size: 12.5px;
+      line-height: 1.5;
+      color: var(--fg-muted);
+    }
+
+    .info-card {
+      border: 1px solid var(--border);
+      background: var(--bg-elevated);
+      border-radius: 10px;
+      padding: 12px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .info-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      font-size: 12px;
+    }
+
+    .info-label {
+      color: var(--fg-muted);
+    }
+
+    .info-val {
+      font-family: inherit;
+      font-size: 11px;
+      color: var(--fg);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 290px;
+    }
+
+    .upgrade-note {
+      font-size: 11.5px;
+      color: var(--success);
+      background: var(--success-soft);
+      border: 1px solid oklch(0.71 0.165 152 / 0.25);
+      border-radius: 8px;
+      padding: 8px 11px;
+      line-height: 1.4;
+    }
+
+    .checks {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .check-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 6px 8px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background-color 0.12s;
+      font-size: 12.5px;
+      color: var(--fg);
+    }
+
+    .check-row:hover {
+      background: var(--bg-elevated);
+    }
+
+    .check-box {
+      width: 16px;
+      height: 16px;
+      border-radius: 5px;
+      border: 1px solid var(--border-strong);
+      background: var(--bg-elevated);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      transition: all 0.12s;
+    }
+
+    .check-row[data-checked="true"] .check-box {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: var(--accent-fg);
+    }
+
+    .progress-wrap {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin: auto 0;
+    }
+
+    .progress-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 12.5px;
+    }
+
+    .progress-msg {
+      color: var(--fg);
+      font-weight: 500;
+    }
+
+    .progress-pct {
+      color: var(--fg-muted);
+      font-variant-numeric: tabular-nums;
+      font-family: inherit;
+      font-size: 11.5px;
+    }
+
+    .track {
+      height: 8px;
+      width: 100%;
+      border-radius: 999px;
+      background: var(--bg-subtle);
+      overflow: hidden;
+      border: 1px solid var(--border);
+    }
+
+    .fill {
+      height: 100%;
+      width: 0%;
+      background: var(--accent);
+      border-radius: 999px;
+      transition: width 0.25s ease;
+    }
+
+    .error-box {
+      border: 1px solid oklch(0.67 0.195 25 / 0.35);
+      background: var(--danger-soft);
+      color: var(--danger);
+      border-radius: 9px;
+      padding: 10px 12px;
+      font-size: 12px;
+      line-height: 1.45;
+      word-break: break-word;
+    }
+
+    .footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding-top: 4px;
+    }
+
+    .footer-hint {
+      font-size: 11px;
+      color: var(--fg-subtle);
+    }
+
+    .btn-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-left: auto;
+    }
+
+    .btn {
+      height: 34px;
+      padding: 0 16px;
+      border-radius: 8px;
+      font-family: inherit;
+      font-size: 12.5px;
+      font-weight: 500;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      border: 1px solid transparent;
+      transition: filter 0.12s, background-color 0.12s, opacity 0.12s;
+    }
+
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+
+    .btn-secondary {
+      background: var(--bg-elevated);
+      border-color: var(--border);
+      color: var(--fg);
+    }
+
+    .btn-secondary:hover:not(:disabled) {
+      background: var(--bg-subtle);
+      border-color: var(--border-strong);
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: var(--accent-fg);
+    }
+
+    .btn-primary:hover:not(:disabled) {
+      filter: brightness(1.08);
+    }
+
+    .hidden {
+      display: none !important;
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <div class="titlebar" id="drag-bar">
+      <div class="brand">
+        <div class="brand-mark">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+            <path d="M6 7L18 12L6 17" stroke="var(--accent)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
+            <circle cx="6" cy="7" r="2.3" fill="var(--fg)" />
+            <circle cx="6" cy="17" r="2.3" fill="var(--fg)" />
+            <circle cx="18" cy="12" r="2.6" fill="var(--accent)" />
+          </svg>
+        </div>
+        <span>AI Proxy</span>
+        <span class="ver-pill" id="ver-pill">v0.2.1</span>
+      </div>
+      <div class="win-controls">
+        <button class="win-btn" id="btn-min" title="Свернуть" aria-label="Свернуть">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M5 12h14" />
+          </svg>
+        </button>
+        <button class="win-btn close" id="btn-close" title="Закрыть" aria-label="Закрыть">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M18 6L6 18M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="body">
+      <div id="screen-ready" style="display:flex;flex-direction:column;gap:14px;flex:1;">
+        <div class="hero">
+          <h1 id="hero-title">Установка AI Proxy</h1>
+          <p id="hero-desc">Локальный прокси-шлюз Anthropic и OpenAI поверх локальных AI CLI.</p>
+        </div>
+
+        <div class="info-card">
+          <div class="info-row">
+            <span class="info-label">Папка установки</span>
+            <span class="info-val" id="install-dir">...</span>
+          </div>
+          <div class="info-row" id="existing-row">
+            <span class="info-label">Текущая версия</span>
+            <span class="info-val" id="existing-ver">—</span>
+          </div>
+        </div>
+
+        <div class="upgrade-note hidden" id="upgrade-note">
+          Обновление установится поверх текущей версии. Ваши аккаунты, история, настройки и API-токен сохранятся.
+        </div>
+
+        <div class="checks">
+          <div class="check-row" id="opt-launch" data-checked="true" tabindex="0" role="checkbox" aria-checked="true">
+            <span class="check-box">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
+            </span>
+            <span>Запустить AI Proxy после завершения</span>
+          </div>
+
+          <div class="check-row" id="opt-desktop" data-checked="true" tabindex="0" role="checkbox" aria-checked="true">
+            <span class="check-box">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
+            </span>
+            <span>Создать ярлык на рабочем столе</span>
+          </div>
+        </div>
+
+        <div class="footer">
+          <span class="footer-hint">Windows x64 · Без прав администратора</span>
+          <div class="btn-row">
+            <button class="btn btn-secondary" id="btn-cancel">Отмена</button>
+            <button class="btn btn-primary" id="btn-install">Установить</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="screen-progress" class="hidden" style="display:flex;flex-direction:column;gap:14px;flex:1;">
+        <div class="hero">
+          <h1 id="prog-title">Идёт установка...</h1>
+          <p id="prog-sub">Пожалуйста, не закрывайте окно до завершения копирования файлов.</p>
+        </div>
+
+        <div class="progress-wrap">
+          <div class="progress-head">
+            <span class="progress-msg" id="prog-msg">Подготовка...</span>
+            <span class="progress-pct" id="prog-pct">0%</span>
+          </div>
+          <div class="track">
+            <div class="fill" id="prog-fill"></div>
+          </div>
+        </div>
+
+        <div class="error-box hidden" id="err-box"></div>
+
+        <div class="footer">
+          <span class="footer-hint" id="prog-hint">Обновление выполняется автоматически</span>
+          <div class="btn-row">
+            <button class="btn btn-secondary hidden" id="btn-retry">Повторить</button>
+            <button class="btn btn-primary hidden" id="btn-finish">Запустить AI Proxy</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const post = (payload) => window.ipc.postMessage(JSON.stringify(payload));
+    const $ = (id) => document.getElementById(id);
+
+    const dragBar = $("drag-bar");
+    dragBar.addEventListener("mousedown", (e) => {
+      if (e.target.closest("button")) return;
+      if (e.button === 0) post({ cmd: "drag" });
+    });
+
+    $("btn-min").addEventListener("click", () => post({ cmd: "minimize" }));
+    $("btn-close").addEventListener("click", () => post({ cmd: "close" }));
+    $("btn-cancel").addEventListener("click", () => post({ cmd: "close" }));
+
+    const toggleCheck = (el) => {
+      const next = el.getAttribute("data-checked") !== "true";
+      el.setAttribute("data-checked", String(next));
+      el.setAttribute("aria-checked", String(next));
+      const box = el.querySelector(".check-box svg");
+      if (box) box.style.opacity = next ? "1" : "0";
+    };
+
+    for (const id of ["opt-launch", "opt-desktop"]) {
+      const el = $(id);
+      el.addEventListener("click", () => toggleCheck(el));
+      el.addEventListener("keydown", (e) => {
+        if (e.key === " " || e.key === "Enter") {
+          e.preventDefault();
+          toggleCheck(el);
+        }
+      });
+    }
+
+    const startInstall = () => {
+      $("screen-ready").classList.add("hidden");
+      $("screen-progress").classList.remove("hidden");
+      $("err-box").classList.add("hidden");
+      $("btn-retry").classList.add("hidden");
+      $("btn-finish").classList.add("hidden");
+      $("prog-title").textContent = state.isUpgrade ? "Идёт обновление..." : "Идёт установка...";
+      $("prog-fill").style.width = "8%";
+      $("prog-pct").textContent = "8%";
+      $("prog-msg").textContent = "Подготовка установки...";
+      post({
+        cmd: "install",
+        launchAfter: $("opt-launch").getAttribute("data-checked") === "true",
+        desktopShortcut: $("opt-desktop").getAttribute("data-checked") === "true",
+      });
+    };
+
+    $("btn-install").addEventListener("click", startInstall);
+    $("btn-retry").addEventListener("click", startInstall);
+    $("btn-finish").addEventListener("click", () => post({ cmd: "launch_and_close" }));
+
+    const state = { isUpgrade: false };
+
+    window.__SETUP_INIT__ = (info) => {
+      $("ver-pill").textContent = "v" + info.version;
+      $("install-dir").textContent = info.installDir;
+      state.isUpgrade = Boolean(info.existingVersion);
+      if (info.existingVersion) {
+        $("existing-ver").textContent = "v" + info.existingVersion;
+        $("hero-title").textContent = "Обновление AI Proxy";
+        $("hero-desc").textContent = "Найдена установленная версия. Обновим приложение без удаления данных.";
+        $("upgrade-note").classList.remove("hidden");
+        $("btn-install").textContent = "Обновить до v" + info.version;
+      } else {
+        $("existing-row").classList.add("hidden");
+        $("hero-title").textContent = "Установка AI Proxy";
+        $("btn-install").textContent = "Установить";
+      }
+    };
+
+    window.__SETUP_PROGRESS__ = (pct, msg) => {
+      $("prog-fill").style.width = Math.max(4, Math.min(100, pct)) + "%";
+      $("prog-pct").textContent = Math.round(pct) + "%";
+      $("prog-msg").textContent = msg;
+    };
+
+    window.__SETUP_DONE__ = (autoLaunched) => {
+      $("prog-fill").style.width = "100%";
+      $("prog-pct").textContent = "100%";
+      $("prog-title").textContent = state.isUpgrade ? "AI Proxy обновлён" : "AI Proxy установлен";
+      $("prog-sub").textContent = autoLaunched
+        ? "Приложение запускается..."
+        : "Всё готово к работе. Настройки и токен сохранены.";
+      $("prog-msg").textContent = "Завершено успешно";
+      $("btn-finish").classList.remove("hidden");
+      if (autoLaunched) {
+        setTimeout(() => post({ cmd: "close" }), 900);
+      }
+    };
+
+    window.__SETUP_ERROR__ = (err) => {
+      $("prog-title").textContent = "Не удалось завершить установку";
+      $("prog-msg").textContent = "Ошибка";
+      $("err-box").textContent = err;
+      $("err-box").classList.remove("hidden");
+      $("btn-retry").classList.remove("hidden");
+    };
+
+    post({ cmd: "ready" });
+  </script>
+</body>
+</html>

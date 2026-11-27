@@ -1,7 +1,9 @@
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
-use std::fs;
+use std::fs::{self, File};
+use std::io::Write;
 use std::path::PathBuf;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_opener::OpenerExt;
 
 const GITHUB_RELEASES_LATEST_URL: &str =
@@ -20,6 +22,16 @@ pub struct AppUpdateInfo {
     pub asset_size: Option<u64>,
     pub published_at: Option<String>,
     pub checked_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateDownloadProgress {
+    pub phase: String,
+    pub downloaded: u64,
+    pub total: u64,
+    pub percent: f64,
+    pub message: String,
 }
 
 fn parse_semver_tuple(raw: &str) -> (u64, u64, u64, bool) {
@@ -63,11 +75,11 @@ fn select_platform_asset<'a>(
         }
 
         let score = if cfg!(target_os = "windows") {
-            if lower.ends_with("-setup.exe") {
+            if lower.contains("setup") && lower.ends_with(".exe") {
                 100
-            } else if lower.ends_with(".msi") {
-                90
             } else if lower.ends_with(".exe") {
+                90
+            } else if lower.ends_with(".msi") {
                 80
             } else {
                 0
@@ -167,30 +179,109 @@ pub async fn check_for_updates() -> Result<AppUpdateInfo, String> {
     })
 }
 
+fn emit_progress(app: &AppHandle, phase: &str, downloaded: u64, total: u64, message: impl Into<String>) {
+    let percent = if total > 0 {
+        ((downloaded as f64 / total as f64) * 100.0).clamp(0.0, 100.0)
+    } else {
+        0.0
+    };
+    let _ = app.emit(
+        "app-update-progress",
+        UpdateDownloadProgress {
+            phase: phase.to_string(),
+            downloaded,
+            total,
+            percent,
+            message: message.into(),
+        },
+    );
+}
+
+#[cfg(target_os = "windows")]
+fn spawn_windows_silent_updater(installer_path: &PathBuf) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    const DETACHED_PROCESS: u32 = 0x00000008;
+
+    let pid = std::process::id();
+    let current_exe = std::env::current_exe()
+        .ok()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    let esc = |s: &str| s.replace('\'', "''");
+    let inst_str = installer_path.to_string_lossy().to_string();
+    let is_msi = inst_str.to_lowercase().ends_with(".msi");
+
+    let install_cmd = if is_msi {
+        format!(
+            "Start-Process -FilePath 'msiexec.exe' -ArgumentList @('/i','{}','/qn','/norestart') -Wait -WindowStyle Hidden",
+            esc(&inst_str)
+        )
+    } else {
+        format!(
+            "Start-Process -FilePath '{}' -ArgumentList '/S' -Wait -WindowStyle Hidden",
+            esc(&inst_str)
+        )
+    };
+
+    let ps_script = format!(
+        "$ErrorActionPreference = 'SilentlyContinue'; \
+         try {{ Wait-Process -Id {pid} -Timeout 15 }} catch {{}}; \
+         Start-Sleep -Milliseconds 350; \
+         {install_cmd}; \
+         $candidates = @('{}', (Join-Path $env:LOCALAPPDATA 'AI Proxy\\AI Proxy.exe')); \
+         $target = $candidates | Where-Object {{ $_ -and (Test-Path $_) }} | Select-Object -First 1; \
+         if ($target) {{ Start-Process -FilePath $target }}; \
+         Remove-Item -LiteralPath '{}' -Force -ErrorAction SilentlyContinue",
+        esc(&current_exe),
+        esc(&inst_str),
+    );
+
+    let mut cmd = std::process::Command::new("powershell.exe");
+    cmd.args([
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-WindowStyle",
+        "Hidden",
+        "-Command",
+        &ps_script,
+    ]);
+    cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS);
+    cmd.spawn()
+        .map_err(|e| format!("Не удалось запустить установщик обновления: {e}"))?;
+    Ok(())
+}
+
 pub async fn download_and_launch_update(
     app: &AppHandle,
     asset_url: Option<String>,
     asset_name: Option<String>,
     release_url: String,
-) -> Result<String, String> {
+) -> Result<(String, bool), String> {
     let Some(url) = asset_url.filter(|u| !u.trim().is_empty()) else {
         app.opener()
             .open_url(&release_url, None::<&str>)
             .map_err(|e| e.to_string())?;
-        return Ok("Открыта страница релиза в браузере".to_string());
+        return Ok(("Открыта страница релиза в браузере".to_string(), false));
     };
 
     let filename = asset_name
         .filter(|n| !n.trim().is_empty())
-        .unwrap_or_else(|| "ai-proxy-update-installer".to_string());
+        .unwrap_or_else(|| "ai-proxy-update-installer.exe".to_string());
 
     let target_dir: PathBuf = app
         .path()
-        .download_dir()
+        .temp_dir()
         .unwrap_or_else(|_| std::env::temp_dir())
         .join("ai-proxy-updates");
     fs::create_dir_all(&target_dir).map_err(|e| e.to_string())?;
     let target_path = target_dir.join(&filename);
+    let part_path = target_dir.join(format!("{filename}.part"));
+
+    emit_progress(app, "downloading", 0, 0, "Подключение к GitHub Releases...");
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(300))
@@ -198,34 +289,75 @@ pub async fn download_and_launch_update(
         .build()
         .map_err(|e| e.to_string())?;
 
-    let bytes = client
+    let resp = client
         .get(&url)
         .send()
         .await
         .map_err(|e| format!("Ошибка загрузки установщика: {e}"))?
         .error_for_status()
-        .map_err(|e| format!("Ошибка сервера при загрузке: {e}"))?
-        .bytes()
-        .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("Ошибка сервера при загрузке: {e}"))?;
 
-    fs::write(&target_path, &bytes).map_err(|e| format!("Ошибка записи файла: {e}"))?;
+    let total = resp.content_length().unwrap_or(0);
+    let mut stream = resp.bytes_stream();
+    let mut file = File::create(&part_path).map_err(|e| format!("Ошибка создания файла: {e}"))?;
+    let mut downloaded: u64 = 0;
+    let mut last_emitted: u64 = 0;
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if let Ok(meta) = fs::metadata(&target_path) {
-            let mut perms = meta.permissions();
-            perms.set_mode(0o755);
-            let _ = fs::set_permissions(&target_path, perms);
+    while let Some(chunk) = stream.next().await {
+        let bytes = chunk.map_err(|e| format!("Ошибка скачивания: {e}"))?;
+        file.write_all(&bytes)
+            .map_err(|e| format!("Ошибка записи файла: {e}"))?;
+        downloaded += bytes.len() as u64;
+        if downloaded - last_emitted >= 65_536 || (total > 0 && downloaded >= total) {
+            last_emitted = downloaded;
+            let mb = downloaded as f64 / 1_048_576.0;
+            let msg = if total > 0 {
+                format!("Загрузка {mb:.1} из {:.1} МБ", total as f64 / 1_048_576.0)
+            } else {
+                format!("Загружено {mb:.1} МБ")
+            };
+            emit_progress(app, "downloading", downloaded, total, msg);
         }
     }
+    file.flush().map_err(|e| format!("Ошибка записи файла: {e}"))?;
+    drop(file);
 
-    app.opener()
-        .open_path(target_path.to_string_lossy().as_ref(), None::<&str>)
-        .map_err(|e| format!("Скачано в {}, но не удалось открыть: {e}", target_path.display()))?;
+    if target_path.exists() {
+        let _ = fs::remove_file(&target_path);
+    }
+    fs::rename(&part_path, &target_path).map_err(|e| format!("Ошибка сохранения файла: {e}"))?;
 
-    Ok(format!("Установщик скачан и запущен: {}", target_path.display()))
+    #[cfg(target_os = "windows")]
+    {
+        emit_progress(
+            app,
+            "installing",
+            total.max(downloaded),
+            total.max(downloaded),
+            "Установка обновления и перезапуск...",
+        );
+        spawn_windows_silent_updater(&target_path)?;
+        return Ok(("Обновление загружено. Перезапуск AI Proxy...".to_string(), true));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(meta) = fs::metadata(&target_path) {
+                let mut perms = meta.permissions();
+                perms.set_mode(0o755);
+                let _ = fs::set_permissions(&target_path, perms);
+            }
+        }
+
+        app.opener()
+            .open_path(target_path.to_string_lossy().as_ref(), None::<&str>)
+            .map_err(|e| format!("Скачано в {}, но не удалось открыть: {e}", target_path.display()))?;
+
+        Ok((format!("Установщик скачан и запущен: {}", target_path.display()), false))
+    }
 }
 
 #[cfg(test)]

@@ -218,6 +218,7 @@ export interface RequestLogEntry {
   resolvedModel: string | null;
   effort: string | null;
   backendKey: string | null;
+  accountLabel: string | null;
   status: number;
   latencyMs: number;
   inputTokens: number;

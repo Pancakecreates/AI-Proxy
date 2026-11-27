@@ -279,8 +279,9 @@ pub async fn save_settings(
     }
 
     if restart_if_running && !state.server_handles.lock().await.is_empty() {
-        let _ = state.start_proxy_internal(Some(app)).await;
+        let _ = state.start_proxy_internal(Some(app.clone())).await;
     }
+    let _ = app.emit("settings-updated", &new_settings);
     Ok(new_settings)
 }
 
@@ -710,7 +711,12 @@ pub async fn send_chat_message(
 
     let s = state.settings.read().await.clone();
     match turn_res {
-        Ok((res, bkey, bkind, _resolved_qid, eff)) => {
+        Ok(out) => {
+            let res = out.turn;
+            let bkey = out.backend_key;
+            let blabel = out.backend_label;
+            let bkind = out.backend_kind;
+            let eff = out.effective_effort;
             let in_tok = if res.usage.input_tokens > 0 { res.usage.input_tokens } else { estimate_tokens_from_chars(est_chars) };
             let out_tok = if res.usage.output_tokens > 0 { res.usage.output_tokens } else { estimate_tokens_from_chars(res.assistant_text.len() + res.thinking_text.len()) };
             let (cost_usd, eq_usd) = calculate_costs(&s, bkind, &res.model_id, in_tok, out_tok);
@@ -725,8 +731,10 @@ pub async fn send_chat_message(
                 method: "CHAT".into(),
                 path: "/sandbox".into(),
                 model: model_id.clone(),
-                resolved_model: Some(res.model_id.clone()), effort: eff.clone(),
+                resolved_model: Some(res.model_id.clone()),
+                effort: eff.clone(),
                 backend_key: Some(bkey),
+                account_label: Some(blabel),
                 status: 200,
                 latency_ms,
                 input_tokens: in_tok,
@@ -758,7 +766,34 @@ pub async fn send_chat_message(
             state.db.insert_chat_message(&reply)?;
             Ok(reply)
         }
-        Err(err) => Err(err),
+        Err(err) => {
+            let latency_ms = start.elapsed().as_millis() as u64;
+            let _ = state.db.insert_request_log(&RequestLogEntry {
+                id: 0,
+                created_at: Utc::now().to_rfc3339(),
+                request_id: format!("chat_{}", uuid::Uuid::new_v4().simple()),
+                protocol: format!("sandbox-{protocol}"),
+                method: "CHAT".into(),
+                path: "/sandbox".into(),
+                model: model_id,
+                resolved_model: err.resolved_model,
+                effort: err.effort,
+                backend_key: err.backend_key,
+                account_label: err.backend_label,
+                status: 502,
+                latency_ms,
+                input_tokens: estimate_tokens_from_chars(est_chars),
+                output_tokens: 0,
+                thinking_tokens: 0,
+                usage_source: "estimated".into(),
+                cost_usd: 0.0,
+                api_equivalent_usd: 0.0,
+                error: Some(err.message.clone()),
+                prompt_preview: Some(content.chars().take(180).collect()),
+                response_preview: None,
+            });
+            Err(err.message)
+        }
     }
 }
 
@@ -803,6 +838,29 @@ pub fn hide_main_window(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn show_main_window(app: AppHandle) -> Result<(), String> {
+    if let Some(tray) = app.get_webview_window("tray") {
+        let _ = tray.hide();
+    }
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.unminimize();
+        let _ = win.show();
+        let _ = win.set_focus();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn quit_app(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    if let Some(tray) = app.get_webview_window("tray") {
+        let _ = tray.hide();
+    }
+    state.stop_proxy_internal().await;
+    app.exit(0);
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn check_app_update() -> Result<crate::updater::AppUpdateInfo, String> {
     crate::updater::check_for_updates().await
 }
@@ -810,11 +868,22 @@ pub async fn check_app_update() -> Result<crate::updater::AppUpdateInfo, String>
 #[tauri::command]
 pub async fn download_and_launch_update(
     app: AppHandle,
+    state: State<'_, Arc<AppState>>,
     asset_url: Option<String>,
     asset_name: Option<String>,
     release_url: String,
 ) -> Result<String, String> {
-    crate::updater::download_and_launch_update(&app, asset_url, asset_name, release_url).await
+    let (msg, should_restart) =
+        crate::updater::download_and_launch_update(&app, asset_url, asset_name, release_url).await?;
+    if should_restart {
+        state.stop_proxy_internal().await;
+        let app_h = app.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            app_h.exit(0);
+        });
+    }
+    Ok(msg)
 }
 
 

@@ -137,7 +137,7 @@ export const Select: React.FC<SelectProps> = ({
     } else if (e.key === "End") {
       e.preventDefault();
       setActiveIndex(filtered.length - 1);
-    } else if (e.key === "Enter" || e.key === " ") {
+    } else if (e.key === "Enter" || (e.key === " " && !(e.target instanceof HTMLInputElement))) {
       e.preventDefault();
       const opt = filtered[activeIndex];
       if (opt) pick(opt);
@@ -158,13 +158,13 @@ export const Select: React.FC<SelectProps> = ({
         aria-controls={open ? listId.current : undefined}
         onClick={() => (open ? close() : openMenu())}
         onKeyDown={onButtonKeyDown}
-        className={`inline-flex h-8 w-full items-center justify-between gap-2 rounded-md border bg-[var(--bg)] px-2.5 text-xs text-[var(--fg)] transition-colors hover:bg-[var(--bg-subtle)] disabled:opacity-50 disabled:hover:bg-[var(--bg)] ${buttonClassName}`}
+        className={`inline-flex h-8 w-full items-center justify-between gap-2 rounded-[7px] border border-[var(--border)] bg-[var(--bg)] px-2.5 text-xs text-[var(--fg)] transition-colors hover:border-[var(--border-strong)] hover:bg-[var(--bg-subtle)]/60 disabled:opacity-45 disabled:hover:bg-[var(--bg)] ${buttonClassName}`}
       >
         <span className={`truncate ${selected ? "" : "text-[var(--fg-subtle)]"}`}>
           {selected ? selected.label : placeholder}
         </span>
         <ChevronDown
-          className={`size-3.5 shrink-0 text-[var(--fg-subtle)] transition-transform ${open ? "rotate-180" : ""}`}
+          className={`size-3.5 shrink-0 text-[var(--fg-subtle)] transition-transform duration-150 ${open ? "rotate-180" : ""}`}
         />
       </button>
 
@@ -174,7 +174,7 @@ export const Select: React.FC<SelectProps> = ({
           role="listbox"
           aria-label={ariaLabel}
           aria-activedescendant={activeIndex >= 0 ? `${listId.current}-opt-${activeIndex}` : undefined}
-          className="absolute left-0 top-full z-50 mt-1 w-full min-w-[10rem] overflow-hidden rounded-md border bg-[var(--bg-elevated)] shadow-[0_8px_24px_rgba(0,0,0,0.18),0_2px_6px_rgba(0,0,0,0.12)]"
+          className="absolute left-0 top-full z-50 mt-1.5 w-full min-w-[11rem] overflow-hidden rounded-[9px] border border-[var(--border-strong)] bg-[var(--bg-elevated)] shadow-[var(--shadow-popover)]"
         >
           {searchable && (
             <div className="border-b p-1.5">
@@ -188,7 +188,7 @@ export const Select: React.FC<SelectProps> = ({
                     setActiveIndex(0);
                   }}
                   placeholder={searchPlaceholder}
-                  className="h-7 w-full rounded-sm bg-[var(--bg)] pl-7 pr-2 text-xs outline-none placeholder:text-[var(--fg-subtle)]"
+                  className="h-7 w-full rounded-[6px] border border-transparent bg-[var(--bg)] pl-7 pr-2 text-xs outline-none placeholder:text-[var(--fg-subtle)] focus:border-[var(--border-strong)]"
                 />
               </div>
             </div>
@@ -210,12 +210,18 @@ export const Select: React.FC<SelectProps> = ({
                     aria-disabled={o.disabled || undefined}
                     onPointerEnter={() => setActiveIndex(i)}
                     onClick={() => pick(o)}
-                    className={`flex cursor-pointer items-center justify-between gap-2 rounded-sm px-2.5 py-1.5 text-xs ${
-                      o.disabled ? "cursor-not-allowed opacity-50" : ""
-                    } ${isActive ? "bg-[var(--accent-soft)] text-[var(--fg)]" : "text-[var(--fg-muted)]"}`}
+                    className={`flex cursor-pointer items-center justify-between gap-2 rounded-[6px] px-2.5 py-1.5 text-xs transition-colors ${
+                      o.disabled ? "cursor-not-allowed opacity-45" : ""
+                    } ${
+                      isActive
+                        ? "bg-[var(--bg-subtle)] text-[var(--fg)]"
+                        : isSelected
+                          ? "text-[var(--fg)]"
+                          : "text-[var(--fg-muted)]"
+                    }`}
                   >
                     <span className="min-w-0">
-                      <span className="block truncate">{o.label}</span>
+                      <span className="block truncate font-medium">{o.label}</span>
                       {o.hint && (
                         <span className="block truncate text-[10px] text-[var(--fg-subtle)]">{o.hint}</span>
                       )}

@@ -8,8 +8,11 @@ desktop/node_modules/
 desktop/dist/
 desktop/src-tauri/target/
 desktop/src-tauri/gen/
+desktop/installer/target/
 
 
 # tooling / local artifacts
 .playwright-mcp/
 .serena/
+.shot*.png
+.ui-shot*.png

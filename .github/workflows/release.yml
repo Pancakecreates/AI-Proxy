@@ -136,13 +136,40 @@ jobs:
             const cargoPath = "desktop/src-tauri/Cargo.toml";
             const cargo = fs.readFileSync(cargoPath, "utf8").replace(/^version = ".*"$/m, `version = "${ver}"`);
             fs.writeFileSync(cargoPath, cargo);
+            const instCargoPath = "desktop/installer/Cargo.toml";
+            if (fs.existsSync(instCargoPath)) {
+              const instCargo = fs.readFileSync(instCargoPath, "utf8").replace(/^version = ".*"$/m, `version = "${ver}"`);
+              fs.writeFileSync(instCargoPath, instCargo);
+            }
           ' "$VER"
 
       - name: Install frontend dependencies
         working-directory: desktop
         run: npm ci
 
-      - name: Build and upload Tauri bundles
+      - name: Build and upload custom Windows Setup
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ver = "${{ inputs.version }}"
+          Push-Location desktop
+          npx tauri build --bundles nsis
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $nsisExe = Get-ChildItem "src-tauri/target/release/bundle/nsis/*-setup.exe" | Select-Object -First 1
+          if (-not $nsisExe) { throw "NSIS setup executable not found" }
+          $env:AI_PROXY_INNER_SETUP_PATH = $nsisExe.FullName
+          $env:AI_PROXY_VERSION = $ver
+          cargo build --release --manifest-path installer/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $outExe = Join-Path (Get-Location) "AI-Proxy-Setup-$ver-x64.exe"
+          Copy-Item "installer/target/release/ai-proxy-setup.exe" $outExe -Force
+          Pop-Location
+          gh release upload "v$ver" $outExe --clobber
+
+      - name: Build and upload Tauri bundles (macOS / Linux)
+        if: matrix.platform != 'windows-latest'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

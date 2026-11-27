@@ -14,6 +14,7 @@ import {
   ArrowDownToLine,
 } from "lucide-react";
 import type { AppUpdateInfo, ProxyRuntimeStatus } from "./types";
+import { Badge, Button } from "./components/ui";
 
 interface TitleBarProps {
   status: ProxyRuntimeStatus | null;
@@ -65,24 +66,33 @@ export const TitleBar: React.FC<TitleBarProps> = ({
   return (
     <header
       data-tauri-drag-region
-      className="flex h-10 shrink-0 items-center justify-between border-b bg-[var(--bg-elevated)] pl-3 pr-0 select-none"
+      className="flex h-10 shrink-0 items-center justify-between border-b bg-[var(--sidebar-bg)] pl-3 pr-0 select-none"
     >
       <div data-tauri-drag-region className="flex items-center gap-2.5 min-w-0">
         <div
           data-tauri-drag-region
-          className="flex size-5 items-center justify-center rounded-[5px] bg-[#141518] border border-[var(--border-strong)]"
+          className="flex size-5 items-center justify-center rounded-[6px] bg-[var(--bg-subtle)] border border-[var(--border-strong)]"
         >
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="M6 7L18 12L6 17" stroke="#e57a48" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
-            <circle cx="6" cy="7" r="2.3" fill="#f4f4f5" />
-            <circle cx="6" cy="17" r="2.3" fill="#f4f4f5" />
-            <circle cx="18" cy="12" r="2.6" fill="#e57a48" />
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path
+              d="M6 7L18 12L6 17"
+              stroke="var(--accent)"
+              strokeWidth="2.4"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <circle cx="6" cy="7" r="2.3" fill="var(--fg)" />
+            <circle cx="6" cy="17" r="2.3" fill="var(--fg)" />
+            <circle cx="18" cy="12" r="2.6" fill="var(--accent)" />
           </svg>
         </div>
-        <span data-tauri-drag-region className="text-[13px] font-semibold tracking-tight text-[var(--fg)]">
+        <span data-tauri-drag-region className="text-[13px] font-semibold tracking-[-0.015em] text-[var(--fg)]">
           AI Proxy
         </span>
-        <span className="inline-flex items-center gap-1.5 rounded-full border bg-[var(--bg-subtle)] px-2 py-0.5 text-[11px] font-medium text-[var(--fg-muted)] tabular-nums">
+        <Badge
+          variant={starting ? "warning" : running ? "success" : "neutral"}
+          className="rounded-full px-2 py-0.5 text-[11px]"
+        >
           <span
             className={`size-1.5 rounded-full ${
               starting
@@ -93,7 +103,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
             }`}
           />
           {starting ? "Запуск..." : running ? `Активен · ${status?.modelsCount ?? 0} мод.` : "Остановлен"}
-        </span>
+        </Badge>
       </div>
 
       <div className="flex h-full items-center gap-1">
@@ -102,21 +112,19 @@ export const TitleBar: React.FC<TitleBarProps> = ({
             type="button"
             onClick={onOpenUpdates}
             title={`Доступна версия v${updateInfo.latestVersion}`}
-            className="mr-1 inline-flex h-6 items-center gap-1 rounded-full border border-[var(--accent)]/40 bg-[var(--accent-soft)] px-2 text-[10px] font-medium text-[var(--accent)] hover:opacity-90"
+            className="mr-1 inline-flex h-6 items-center gap-1 rounded-full border border-[var(--accent)]/35 bg-[var(--accent-soft)] px-2 text-[11px] font-medium text-[var(--accent)] hover:brightness-110 transition-all"
           >
             <ArrowDownToLine className="size-3" />
             <span>v{updateInfo.latestVersion}</span>
           </button>
         )}
-        <button
-          type="button"
+
+        <Button
+          variant={running ? "secondary" : "primary"}
+          size="xs"
           onClick={onToggleProxy}
           disabled={starting}
-          className={`mr-1 inline-flex h-6.5 items-center gap-1.5 rounded-md px-2.5 text-[11px] font-medium transition-colors ${
-            running
-              ? "border bg-[var(--bg-subtle)] text-[var(--fg)] hover:bg-[var(--border)]"
-              : "bg-[var(--accent)] text-[var(--accent-fg)] hover:opacity-90"
-          }`}
+          className="mr-1 h-6.5"
         >
           {starting ? (
             <Loader2 className="size-3 animate-spin" />
@@ -126,14 +134,15 @@ export const TitleBar: React.FC<TitleBarProps> = ({
             <Play className="size-3 fill-current" />
           )}
           <span>{running ? "Стоп" : "Старт"}</span>
-        </button>
+        </Button>
 
-        <button
-          type="button"
+        <Button
+          variant="ghost"
+          size="icon"
           onClick={onCycleTheme}
           title={`Тема: ${theme === "auto" ? "Авто" : theme === "dark" ? "Тёмная" : "Светлая"}`}
           aria-label="Переключить тему"
-          className="inline-flex size-7 items-center justify-center rounded-md text-[var(--fg-muted)] hover:bg-[var(--bg-subtle)] hover:text-[var(--fg)] transition-colors"
+          className="size-7"
         >
           {theme === "auto" ? (
             <Monitor className="size-3.5" />
@@ -142,7 +151,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
           ) : (
             <Sun className="size-3.5" />
           )}
-        </button>
+        </Button>
 
         <div className="ml-1 flex h-full items-center border-l">
           <button

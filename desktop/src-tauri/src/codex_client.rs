@@ -11,7 +11,7 @@ use chrono::Utc;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
@@ -60,7 +60,14 @@ pub struct CodexBackend {
     warmup_lock: Arc<Mutex<()>>,
     last_error: Arc<RwLock<Option<String>>>,
     stopping: AtomicBool,
+    last_msg_ms: Arc<AtomicU64>,
+    tools_in_flight: Arc<AtomicUsize>,
+    running_tools: Arc<Mutex<HashMap<String, ()>>>,
 }
+
+/// Пока инструмент выполняется (сборка, тесты, длинная команда), Codex
+/// законно молчит. На это время лимит тишины не ниже получаса.
+const TOOL_IDLE_FLOOR_MS: u64 = 30 * 60_000;
 
 fn now_ms() -> u64 {
     Utc::now().timestamp_millis().max(0) as u64
@@ -127,6 +134,9 @@ impl CodexBackend {
             warmup_lock: Arc::new(Mutex::new(())),
             last_error: Arc::new(RwLock::new(None)),
             stopping: AtomicBool::new(false),
+            last_msg_ms: Arc::new(AtomicU64::new(0)),
+            tools_in_flight: Arc::new(AtomicUsize::new(0)),
+            running_tools: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -206,6 +216,7 @@ impl CodexBackend {
                     continue;
                 }
                 if let Ok(msg) = serde_json::from_str::<Value>(trimmed) {
+                    this.last_msg_ms.store(now_ms(), Ordering::SeqCst);
                     this.handle_incoming(msg).await;
                 }
             }
@@ -268,7 +279,33 @@ impl CodexBackend {
         }
     }
 
+    async fn track_tool_item(&self, method: &str, params: &Value) {
+        if method != "item/started" && method != "item/completed" {
+            return;
+        }
+        let Some(item) = params.get("item") else {
+            return;
+        };
+        let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        if item_type.is_empty() || item_type == "agentMessage" || item_type == "reasoning" {
+            return;
+        }
+        let key = item
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or(item_type)
+            .to_string();
+        let mut map = self.running_tools.lock().await;
+        if method == "item/started" {
+            map.insert(key, ());
+        } else {
+            map.remove(&key);
+        }
+        self.tools_in_flight.store(map.len(), Ordering::SeqCst);
+    }
+
     async fn handle_notification(&self, method: &str, params: &Value) {
+        self.track_tool_item(method, params).await;
         let Some(thread_id) = params.get("threadId").and_then(|v| v.as_str()) else {
             return;
         };
@@ -413,6 +450,8 @@ impl CodexBackend {
             }
         }
         self.threads.lock().await.clear();
+        self.running_tools.lock().await.clear();
+        self.tools_in_flight.store(0, Ordering::SeqCst);
         for (_, tx) in self.pending.lock().await.drain() {
             let _ = tx.send(Err(reason.to_string()));
         }
@@ -765,6 +804,7 @@ impl CodexBackend {
             }
         }
 
+        self.last_msg_ms.store(now_ms(), Ordering::SeqCst);
         let start_res = self
             .rpc_request("turn/start", turn_params, settings.startup_timeout_ms)
             .await;
@@ -785,18 +825,40 @@ impl CodexBackend {
             }
         }
 
-        let wait_fut = tokio::time::timeout(
-            std::time::Duration::from_millis(settings.request_timeout_ms),
-            done_rx,
-        );
+        let wait_fut = {
+            let last = self.last_msg_ms.clone();
+            let tools = self.tools_in_flight.clone();
+            let idle_ms = settings.request_timeout_ms;
+            let mut done_rx = done_rx;
+            async move {
+                loop {
+                    match tokio::time::timeout(std::time::Duration::from_millis(1_000), &mut done_rx).await {
+                        Ok(Ok(r)) => return r,
+                        Ok(Err(_)) => return Err("Codex turn channel closed".to_string()),
+                        Err(_) => {
+                            let busy = tools.load(Ordering::SeqCst);
+                            let limit = if busy > 0 { idle_ms.max(TOOL_IDLE_FLOOR_MS) } else { idle_ms };
+                            let silent = now_ms().saturating_sub(last.load(Ordering::SeqCst));
+                            if silent >= limit {
+                                let hint = if busy > 0 {
+                                    format!(", инструмент так и не завершился за {} мин", limit / 60_000)
+                                } else {
+                                    String::new()
+                                };
+                                return Err(format!(
+                                    "Codex молчит {} с{hint}: похоже, зависло — попробуйте ещё раз",
+                                    silent / 1000
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        };
 
         let outcome = if let Some(notify) = cancel_notify {
             tokio::select! {
-                res = wait_fut => match res {
-                    Ok(Ok(r)) => r,
-                    Ok(Err(_)) => Err("Codex turn channel closed".to_string()),
-                    Err(_) => Err("Codex turn timeout".to_string()),
-                },
+                res = wait_fut => res,
                 _ = notify.notified() => {
                     let turn_id = self.active_turns.lock().await.get(&thread.thread_id).and_then(|a| a.turn_id.clone());
                     if let Some(tid) = turn_id {
@@ -806,14 +868,12 @@ impl CodexBackend {
                 }
             }
         } else {
-            match wait_fut.await {
-                Ok(Ok(r)) => r,
-                Ok(Err(_)) => Err("Codex turn channel closed".to_string()),
-                Err(_) => Err("Codex turn timeout".to_string()),
-            }
+            wait_fut.await
         };
 
         let turn_state = self.active_turns.lock().await.remove(&thread.thread_id);
+        self.running_tools.lock().await.clear();
+        self.tools_in_flight.store(0, Ordering::SeqCst);
         match outcome {
             Ok(()) => {
                 let st = turn_state.unwrap();

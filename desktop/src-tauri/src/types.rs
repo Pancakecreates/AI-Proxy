@@ -234,7 +234,7 @@ pub struct ModelPricing {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(default, rename_all = "camelCase")]
 pub struct AppSettings {
     pub host: String,
     pub anthropic_port: u16,
@@ -333,7 +333,7 @@ impl Default for AppSettings {
             show_tools: ShowToolsMode::Thinking,
             process_model: ProcessModel::InProcess,
             gateway_aliases: true,
-            request_timeout_ms: 600_000,
+            request_timeout_ms: 900_000,
             startup_timeout_ms: 45_000,
             idle_session_ttl_ms: 1_800_000,
             max_sessions: 12,
@@ -518,6 +518,7 @@ pub struct RequestLogEntry {
     pub resolved_model: Option<String>,
     pub effort: Option<String>,
     pub backend_key: Option<String>,
+    pub account_label: Option<String>,
     pub status: u16,
     pub latency_ms: u64,
     pub input_tokens: u64,

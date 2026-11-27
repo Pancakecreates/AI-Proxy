@@ -289,7 +289,7 @@ pub async fn fetch_codex_quota(settings: &AppSettings) -> AccountQuotaReport {
                 } else if id == Some(3) {
                     got_rl = true;
                     if let Some(rl) = v.get("result").and_then(|r| r.get("rateLimits")) {
-                        for (w_key, w_label) in [("primary", "5h / Primary"), ("secondary", "Weekly / Secondary")] {
+                        for (w_key, w_label) in [("primary", "Окно 5 ч"), ("secondary", "Недельный лимит")] {
                             if let Some(win) = rl.get(w_key).filter(|x| !x.is_null()) {
                                 let used = win.get("usedPercent").and_then(|x| x.as_f64()).unwrap_or(0.0);
                                 let rem = (100.0 - used).clamp(0.0, 100.0);
