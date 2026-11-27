@@ -1,0 +1,117 @@
+name: Release Desktop App
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g. 0.1.0, used directly as Release Title)"
+        required: true
+        default: "0.1.0"
+        type: string
+      notes:
+        description: "Additional release notes"
+        required: false
+        default: ""
+        type: string
+      prerelease:
+        description: "Mark as pre-release"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  build-tauri:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            args: ""
+          - platform: macos-latest
+            args: "--target universal-apple-darwin"
+          - platform: ubuntu-22.04
+            args: ""
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+
+      - name: Install Linux system dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libgtk-3-dev \
+            libssl-dev
+
+      - name: Sync version into manifests
+        shell: bash
+        run: |
+          VER="${{ inputs.version }}"
+          node -e '
+            const fs = require("fs");
+            const ver = process.argv[1];
+            for (const p of ["desktop/package.json", "desktop/src-tauri/tauri.conf.json"]) {
+              const j = JSON.parse(fs.readFileSync(p, "utf8"));
+              j.version = ver;
+              fs.writeFileSync(p, JSON.stringify(j, null, 2) + "\n");
+            }
+            const cargoPath = "desktop/src-tauri/Cargo.toml";
+            const cargo = fs.readFileSync(cargoPath, "utf8").replace(/^version = ".*"$/m, `version = "${ver}"`);
+            fs.writeFileSync(cargoPath, cargo);
+          ' "$VER"
+
+      - name: Install frontend dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Build and upload Tauri bundles
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: desktop
+          tagName: v${{ inputs.version }}
+          releaseName: ${{ inputs.version }}
+          releaseBody: |
+            ## AI-Anthropic-Proxy Desktop (AI Proxy)
+
+            Кроссплатформенное Tauri-приложение с локальными шлюзами **Anthropic Messages API** и **OpenAI Chat / Responses API** поверх локальных AI CLI (Devin, Antigravity, OpenCode, Grok, Codex, Copilot, Cursor, Cline, Mistral, Kimi, Hermes и Custom ACP).
+
+            ### Что включено
+            - Двойной шлюз: Anthropic (`/v1/messages`, `/v1/models`) и OpenAI/Codex (`/v1/chat/completions`, `/v1/responses`, `/v1/models`)
+            - Встроенная авторизация, мультиаккаунтность Antigravity и просмотр живых лимитов/квот
+            - Автозагрузка недостающих CLI движков, локальная SQLite БД тест-чатов, подробные логи и учёт токенов/трат
+            - Установщики: Windows (`.exe` NSIS / `.msi`), macOS (`.dmg` Universal), Linux (`.AppImage` / `.deb`)
+
+            ${{ inputs.notes }}
+          releaseDraft: false
+          prerelease: ${{ inputs.prerelease }}
+          args: ${{ matrix.args }}

@@ -1,0 +1,105 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --bg: #fafafa;
+    --bg-elevated: #ffffff;
+    --bg-subtle: #f4f4f5;
+    --border: #e4e4e7;
+    --border-strong: #d4d4d8;
+    --fg: #18181b;
+    --fg-muted: #52525b;
+    --fg-subtle: #71717a;
+    --accent: #d96b3b;
+    --accent-fg: #ffffff;
+    --accent-soft: rgba(217, 107, 59, 0.12);
+    --success: #16a34a;
+    --warning: #d97706;
+    --danger: #dc2626;
+    color-scheme: light;
+  }
+
+  html[data-theme="dark"] {
+    --bg: #0c0d0f;
+    --bg-elevated: #131519;
+    --bg-subtle: #1a1d23;
+    --border: #252830;
+    --border-strong: #323742;
+    --fg: #f4f4f5;
+    --fg-muted: #a1a1aa;
+    --fg-subtle: #71717a;
+    --accent: #e57a48;
+    --accent-fg: #ffffff;
+    --accent-soft: rgba(229, 122, 72, 0.14);
+    --success: #22c55e;
+    --warning: #f59e0b;
+    --danger: #ef4444;
+    color-scheme: dark;
+  }
+
+  html[data-accent="emerald"] {
+    --accent: #10b981;
+    --accent-soft: rgba(16, 185, 129, 0.13);
+  }
+  html[data-accent="cobalt"] {
+    --accent: #2563eb;
+    --accent-soft: rgba(37, 99, 235, 0.13);
+  }
+  html[data-accent="zinc"] {
+    --accent: #52525b;
+    --accent-soft: rgba(82, 82, 91, 0.14);
+  }
+  html[data-theme="dark"][data-accent="cobalt"] {
+    --accent: #3b82f6;
+  }
+  html[data-theme="dark"][data-accent="zinc"] {
+    --accent: #d4d4d8;
+    --accent-fg: #18181b;
+  }
+
+  * {
+    border-color: var(--border);
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    background-color: var(--bg);
+    color: var(--fg);
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  code,
+  pre,
+  .font-mono {
+    font-family: "JetBrains Mono", "Cascadia Code", "Fira Code", ui-monospace, SFMono-Regular, monospace;
+  }
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Custom subtle scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--fg-subtle);
+}
+
+html[data-theme="dark"] .brand-ink-invert {
+  filter: invert(1) brightness(1.05);
+}
