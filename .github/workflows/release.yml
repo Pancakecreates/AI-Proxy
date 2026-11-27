@@ -18,6 +18,11 @@ on:
         required: false
         default: false
         type: boolean
+      platforms:
+        description: "Target platforms: all, windows, macos, linux"
+        required: false
+        default: "all"
+        type: string
 
 permissions:
   contents: write
@@ -71,6 +76,11 @@ jobs:
             args: ""
 
     runs-on: ${{ matrix.platform }}
+    if: >-
+      inputs.platforms == 'all' ||
+      (inputs.platforms == 'windows' && matrix.platform == 'windows-latest') ||
+      (inputs.platforms == 'macos' && matrix.platform == 'macos-latest') ||
+      (inputs.platforms == 'linux' && matrix.platform == 'ubuntu-22.04')
 
     steps:
       - name: Checkout repository
@@ -99,11 +109,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
             patchelf \
             libgtk-3-dev \
+            libxdo-dev \
             libssl-dev
 
       - name: Sync version into manifests
