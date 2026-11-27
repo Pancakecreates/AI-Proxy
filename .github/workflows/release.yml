@@ -57,7 +57,7 @@ jobs:
         run: |
           TAG="v${{ inputs.version }}"
           TITLE="${{ inputs.version }}"
-          BODY="## AI-Anthropic-Proxy Desktop (AI Proxy)
+          BODY="## AI Proxy Desktop
 
           Кроссплатформенное приложение (Tauri) и Node.js CLI с локальными шлюзами **Anthropic Messages API** и **OpenAI Chat / Responses API** поверх локальных AI CLI (Devin, Antigravity, OpenCode, Grok, Codex, Copilot, Cursor, Cline, Mistral, Kimi, Hermes и Custom ACP).
 
@@ -151,7 +151,7 @@ jobs:
           tagName: v${{ inputs.version }}
           releaseName: ${{ inputs.version }}
           releaseBody: |
-            ## AI-Anthropic-Proxy Desktop (AI Proxy)
+            ## AI Proxy Desktop
 
             Кроссплатформенное Tauri-приложение с локальными шлюзами **Anthropic Messages API** и **OpenAI Chat / Responses API** поверх локальных AI CLI (Devin, Antigravity, OpenCode, Grok, Codex, Copilot, Cursor, Cline, Mistral, Kimi, Hermes и Custom ACP).
 

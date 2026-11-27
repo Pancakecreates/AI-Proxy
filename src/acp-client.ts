@@ -15,8 +15,8 @@ import type {
 } from "./types.js";
 
 const CLIENT_INFO = {
-  name: "ai-anthropic-proxy",
-  title: "AI-Anthropic-Proxy",
+  name: "ai-proxy",
+  title: "AI Proxy",
   version: "1.4.0",
 } as const;
 

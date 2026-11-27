@@ -261,7 +261,7 @@ export class CodexBackend extends EventEmitter implements ProxyBackend {
     await this.#request(
       "initialize",
       {
-        clientInfo: { name: "ai-anthropic-proxy", title: "AI-Anthropic-Proxy", version: "1.4.0" },
+        clientInfo: { name: "ai-proxy", title: "AI Proxy", version: "1.4.0" },
         capabilities: { experimentalApi: true },
       },
       this.#config.startupTimeoutMs,

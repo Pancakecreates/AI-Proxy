@@ -5,7 +5,7 @@ use tauri::{AppHandle, Manager};
 use tauri_plugin_opener::OpenerExt;
 
 const GITHUB_RELEASES_LATEST_URL: &str =
-    "https://api.github.com/repos/Pancakecreates/AI-Anthropic-Proxy/releases/latest";
+    "https://api.github.com/repos/Pancakecreates/AI-Proxy/releases/latest";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -134,7 +134,7 @@ pub async fn check_for_updates() -> Result<AppUpdateInfo, String> {
     let release_url = body
         .get("html_url")
         .and_then(|v| v.as_str())
-        .unwrap_or("https://github.com/Pancakecreates/AI-Anthropic-Proxy/releases/latest")
+        .unwrap_or("https://github.com/Pancakecreates/AI-Proxy/releases/latest")
         .to_string();
     let release_notes = body
         .get("body")

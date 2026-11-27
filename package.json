@@ -1,5 +1,5 @@
 {
-  "name": "ai-anthropic-proxy",
+  "name": "ai-proxy",
   "version": "1.4.0",
   "description": "Cross-platform Anthropic Messages & OpenAI Chat/Responses proxy (CLI + Tauri Desktop) backed by local AI CLIs.",
   "type": "module",
@@ -7,7 +7,7 @@
   "private": true,
   "main": "dist/index.js",
   "bin": {
-    "ai-anthropic-proxy": "./dist/index.js"
+    "ai-proxy": "./dist/index.js"
   },
   "scripts": {
     "build": "tsc",

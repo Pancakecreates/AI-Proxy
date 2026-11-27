@@ -1,4 +1,4 @@
-# AI-Anthropic-Proxy
+# AI Proxy
 
 Local gateway that exposes **Anthropic Messages API** (`/v1/messages`, `/v1/models`, `/v1/messages/count_tokens`) and **OpenAI / Codex API** (`/v1/chat/completions`, `/v1/responses`, `/openai/v1/models`) on top of local AI CLIs already installed on your machine.
 
@@ -25,7 +25,7 @@ Any installed CLI is picked up automatically from OpenBot's `provider-runtimes` 
 
 ## Desktop App (AI Proxy)
 
-Download prebuilt installers from the [Releases](https://github.com/Pancakecreates/AI-Anthropic-Proxy/releases) page:
+Download prebuilt installers from the [Releases](https://github.com/Pancakecreates/AI-Proxy/releases) page:
 - Windows: `*-setup.exe` / `.msi`
 - macOS (Universal): `.dmg`
 - Linux: `.AppImage` / `.deb`
@@ -121,8 +121,8 @@ wire_api = "responses"
 Requirements: Node.js >= 20 and at least one authenticated local AI CLI.
 
 ```bash
-git clone https://github.com/Pancakecreates/AI-Anthropic-Proxy.git
-cd AI-Anthropic-Proxy
+git clone https://github.com/Pancakecreates/AI-Proxy.git
+cd AI-Proxy
 npm install
 cp .env.example .env
 npm run build

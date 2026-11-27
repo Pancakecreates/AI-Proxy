@@ -360,7 +360,7 @@ async function main(): Promise<void> {
     openaiBaseUrl = `http://${config.host}:${ob?.port ?? config.openaiPort}/v1`;
   }
 
-  console.log(`AI-Anthropic-Proxy listening on ${baseUrl}`);
+  console.log(`AI Proxy listening on ${baseUrl}`);
   if (config.enableOpenai !== false) {
     console.log(`OpenAI / Codex gateway: ${openaiBaseUrl}`);
   }

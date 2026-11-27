@@ -590,7 +590,7 @@ export function loadConfig(argv: readonly string[] = process.argv.slice(2)): Pro
 }
 
 export function helpText(): string {
-  return `AI-Anthropic-Proxy - Multi-backend local Anthropic & OpenAI API proxy
+  return `AI Proxy - Multi-backend local Anthropic & OpenAI API proxy
 
 Usage:
   npm start -- [options]
