@@ -1,21 +1,124 @@
 # AI-Anthropic-Proxy
 
-Local Anthropic Messages API (`GET /v1/models`, `POST /v1/messages`, `POST /v1/messages/count_tokens`) proxy backed by Cognition Devin CLI over ACP (`devin acp`). Written in strict **TypeScript** for **Node.js** so you can connect Claude Desktop (Third-Party Inference) or Claude Code directly to your local Devin agent and any model in your Devin account (Claude, DeepSeek, GPT, Gemini, SWE, Grok, Kimi, GLM).
+Local gateway that exposes **Anthropic Messages API** (`/v1/messages`, `/v1/models`, `/v1/messages/count_tokens`) and **OpenAI / Codex API** (`/v1/chat/completions`, `/v1/responses`, `/openai/v1/models`) on top of local AI CLIs already installed on your machine.
 
-## Features
+Includes both a **Node.js CLI proxy** and a **cross-platform Tauri Desktop app (AI Proxy)** for Windows, macOS, and Linux.
 
-- **TypeScript codebase** — strictly typed ACP JSON-RPC 2.0 client, Anthropic Messages API handler, and session manager (`src/*.ts` -> `dist/*.js`).
-- **Anthropic Messages API compatible** — implements `POST /v1/messages` (streaming SSE with `ping` keepalive + `thinking` blocks, and non-streaming JSON), `GET /v1/models` (with `max_input_tokens`, `max_tokens`, `capabilities`, `line`), and `POST /v1/messages/count_tokens`.
-- **Full per-model effort & speed control** — maps Anthropic `output_config.effort`, `thinking.budget_tokens`, and model suffixes (`-none`, `-low`, `-medium`, `-high`, `-xhigh`, `-max`, `-fast`, `-lightning`) to each model's live `thought_level` and `speed` options in `devin acp`.
-- **Any model via Devin ACP** — automatically discovers your full Devin model catalog (`121+` base models) and resolves exact IDs, `[1m]` suffixes, Anthropic aliases (`claude-opus-*`, `claude-sonnet-*`, `claude-haiku-*`), fuzzy names (`deepseek`, `gemini`, `swe`), or custom `DEVIN_MODEL_MAP` overrides.
-- **Stateful session continuation** — matches incoming stateless `messages[]` prefixes onto open Devin ACP sessions and switches models, efforts, and speeds dynamically via `session/set_config_option`.
+## Supported Backends
 
-## Requirements
+Any installed CLI is picked up automatically from OpenBot's `provider-runtimes` / `provider-accounts` directories or your system `PATH`:
 
-- Node.js >= 20 (tested on Node 24)
-- Authenticated Devin CLI (`devin auth status` active; auto-detects `devin.exe` from OpenBot runtimes or `PATH`)
+| Backend | Prefix | Protocol |
+| --- | --- | --- |
+| Cognition Devin CLI | *(default)* | ACP |
+| Google Antigravity (multi-account) | `agy-<id>.` | ACP |
+| OpenCode (`go-free`, `all`, or `custom`) | `oc-go.` / `oc-free.` / `oc.` | ACP |
+| xAI Grok CLI | `grok.` | ACP |
+| OpenAI Codex CLI | `codex.` | `codex app-server` |
+| GitHub Copilot CLI | `copilot.` | ACP |
+| Cursor CLI | `cursor.` | ACP |
+| Cline CLI | `cline.` | ACP |
+| Mistral Vibe CLI | `mistral.` | ACP |
+| Kimi CLI | `kimi.` | ACP |
+| Hermes CLI | `hermes.` | ACP |
+| Custom ACP Agents | `acp-<id>.` | ACP |
 
-## Installation & Run
+## Desktop App (AI Proxy)
+
+Download prebuilt installers from the [Releases](https://github.com/Pancakecreates/AI-Anthropic-Proxy/releases) page:
+- Windows: `*-setup.exe` / `.msi`
+- macOS (Universal): `.dmg`
+- Linux: `.AppImage` / `.deb`
+
+Desktop features:
+- **Dual HTTP listeners**: Anthropic gateway on `:8787` and OpenAI/Codex gateway on `:8788` (configurable; both protocols also work together on the main port).
+- **Accounts & CLI management**: inspect live quotas (Antigravity & Codex), sign in / add accounts in-app, configure Custom ACP agents, and download missing CLI runtimes on demand.
+- **Built-in SQLite history**: local test chat with reasoning blocks, full request/error logs, token breakdown, and API-equivalent cost analytics.
+- **System integration**: light/dark/auto themes, custom frameless window controls, minimize-to-tray, OS autostart, and in-app GitHub Releases update checker.
+
+## Dual Gateway Usage & Request Formats
+
+You can connect both Anthropic clients and OpenAI / Codex clients at the same time.
+
+### 1. Anthropic Messages API (`http://127.0.0.1:8787`)
+
+Use for **Claude Desktop** (Developer Mode -> Third-Party Inference -> Gateway), **Claude Code**, or Anthropic SDKs:
+
+```json
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:8787",
+    "ANTHROPIC_AUTH_TOKEN": "local-proxy"
+  }
+}
+```
+
+Endpoints:
+- `GET /v1/models` (auto-generates `claude-fable-acp-...` gateway aliases for Claude Desktop; pass `?raw=1` for raw qualified IDs)
+- `POST /v1/messages` (streaming SSE with `thinking` blocks + non-streaming JSON)
+- `POST /v1/messages/count_tokens`
+
+```bash
+curl http://127.0.0.1:8787/v1/messages \
+  -H "content-type: application/json" \
+  -H "x-api-key: local-proxy" \
+  -d '{
+    "model": "codex.gpt-5.4",
+    "max_tokens": 1024,
+    "output_config": { "effort": "high" },
+    "messages": [{ "role": "user", "content": "Hello" }]
+  }'
+```
+
+### 2. OpenAI & Codex API (`http://127.0.0.1:8788/v1` or `http://127.0.0.1:8787/openai/v1`)
+
+Port `8788` (or `/openai/v1/*` on port `8787`) speaks standard OpenAI format directly and uses native model IDs such as `codex.gpt-5.4` or `agy-primary.gemini-4-hydrogen`.
+
+**Chat Completions** (`POST /v1/chat/completions`):
+
+```bash
+curl http://127.0.0.1:8788/v1/chat/completions \
+  -H "content-type: application/json" \
+  -H "authorization: Bearer local-proxy" \
+  -d '{
+    "model": "grok.grok-4.7",
+    "reasoning_effort": "high",
+    "stream": true,
+    "messages": [
+      { "role": "system", "content": "You are concise." },
+      { "role": "user", "content": "Explain epoll vs kqueue." }
+    ]
+  }'
+```
+
+**Responses API / Codex CLI** (`POST /v1/responses`):
+
+```bash
+curl http://127.0.0.1:8788/v1/responses \
+  -H "content-type: application/json" \
+  -H "authorization: Bearer local-proxy" \
+  -d '{
+    "model": "codex.gpt-5.4",
+    "instructions": "You are a coding assistant.",
+    "reasoning": { "effort": "medium" },
+    "input": "Write a tiny HTTP health check in Rust."
+  }'
+```
+
+**Codex CLI configuration** (`~/.codex/config.toml`):
+
+```toml
+model_provider = "local_proxy"
+
+[model_providers.local_proxy]
+name = "AI Proxy"
+base_url = "http://127.0.0.1:8788/v1"
+wire_api = "responses"
+```
+
+## CLI Quick Start
+
+Requirements: Node.js >= 20 and at least one authenticated local AI CLI.
 
 ```bash
 git clone https://github.com/Pancakecreates/AI-Anthropic-Proxy.git
@@ -26,66 +129,38 @@ npm run build
 npm start
 ```
 
-### Development mode (no build step)
-
-```bash
-npm run dev
-```
-
-### Windows quick start
-
-Double-click or run `start-proxy.bat` (automatically runs `npm install` and `npm run build` on first launch, then starts `node dist/index.js`).
-
-## Configuration
+### CLI Options & Environment Variables
 
 | Variable / Flag | Default | Description |
 | --- | --- | --- |
-| `PORT` / `--port` | `8787` | HTTP listen port |
-| `HOST` / `--host` | `127.0.0.1` | HTTP bind host |
-| `DEVIN_CWD` / `--cwd` | User home | Workspace directory passed to Devin sessions |
-| `DEVIN_MODE` / `--mode` | `bypass` | Devin ACP mode: `bypass`, `accept-edits`, `smart`, `ask`, `plan` |
-| `DEVIN_MODEL` / `--model` | `swe-2-1-medium` | Fallback model ID when unknown |
-| `DEVIN_THOUGHT_LEVEL` / `--thought-level` | — | Default effort: `none`, `low`, `medium`, `high`, `xhigh`, `max` |
-| `DEVIN_SPEED` / `--speed` | — | Default speed: `standard`, `fast`, `ultrafast` |
-| `DEVIN_SHOW_TOOLS` / `--show-tools` | `thinking` | Where to emit Devin tool status: `thinking`, `text`, `none` |
-| `DEVIN_PROCESS_MODEL` / `--process-model` | `in-process` | Devin process model: `in-process` or `daemon` |
-| `PROXY_API_KEY` / `--api-key` | — | Optional API key (`x-api-key` or `Authorization: Bearer ...`) |
-| `DEVIN_MODEL_MAP` | `{}` | JSON map from client model ID to Devin model ID |
-| `DEVIN_GATEWAY_ALIASES` / `--no-gateway-aliases` | `true` | Expose non-Claude Devin models under Claude Desktop Gateway-compatible IDs in `/v1/models` (`?raw=1` disables per request) |
+| `PORT` / `--port` | `8787` | Main HTTP listen port |
+| `OPENAI_PORT` / `--openai-port` | unset | Optional second listener dedicated to OpenAI format (e.g. `8788`) |
+| `HOST` / `--host` | `127.0.0.1` | Bind address |
+| `PROXY_API_KEY` / `--api-key` | unset | Optional `x-api-key` / `Authorization: Bearer ...` secret |
+| `DEVIN_CWD` / `--cwd` | User home | Working directory for agent sessions |
+| `DEVIN_MODE` / `--mode` | `bypass` | Permission mode: `bypass`, `accept-edits`, `smart`, `ask`, `plan` |
+| `DEVIN_MODEL` / `--model` | `swe-2-1-medium` | Fallback model ID |
+| `DEVIN_THOUGHT_LEVEL` / `--thought-level` | unset | Default effort: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
+| `DEVIN_SPEED` / `--speed` | unset | Default speed: `standard`, `fast`, `ultrafast` |
+| `ENABLE_ANTHROPIC` / `ENABLE_OPENAI` | `true` | Toggle Anthropic or OpenAI protocol handlers |
+| `ENABLE_DEVIN`, `ENABLE_ANTIGRAVITY`, `ENABLE_OPENCODE`, `ENABLE_GROK`, `ENABLE_CODEX` | auto | Enable/disable core backends |
+| `ENABLE_COPILOT`, `ENABLE_CURSOR`, `ENABLE_CLINE`, `ENABLE_MISTRAL`, `ENABLE_KIMI`, `ENABLE_HERMES` | auto | Enable/disable additional ACP backends (`--no-copilot`, etc.) |
+| `CUSTOM_ACP_AGENTS` / `--custom-acp` | `[]` | JSON array of custom ACP definitions (`{id,name,command,args,env,cwd,authMethodId,enabled}`) |
 
-## Connect to Claude Desktop
-
-1. Open **Claude Desktop**.
-2. Enable Developer Mode: **Help -> Troubleshooting -> Enable Developer Mode**.
-3. Open **Developer -> Configure Third-Party Inference**.
-4. Set **Inference Provider** to **Gateway**:
-   - **Gateway Base URL**: `http://127.0.0.1:8787`
-   - **API Key**: your `PROXY_API_KEY` from `.env` (or any string if `PROXY_API_KEY` is unset)
-
-### Using all 121+ models (DeepSeek, GPT, Gemini, SWE, Kimi, GLM, Grok, Claude)
-
-- **Automatic Model discovery (recommended):** Keep **Model discovery** on and **Model list** empty. Because Claude Desktop filters `/v1/models` to Anthropic-looking route IDs and rejects names like `deepseek`, `gpt`, `gemini`, `glm`, `kimi`, `grok`, or `nemotron`, the proxy automatically exposes non-Claude models under reversible `claude-fable-acp-...` gateway aliases while keeping their real `display_name` (such as `DeepSeek V4 Pro`, `GPT-6.2 Astra`, `Gemini 4 Neon`, `SWE-2.1`) and decoding incoming requests (including `[1m]` variants) back to the exact Devin model. Pass `?raw=1` to `/v1/models` or set `DEVIN_GATEWAY_ALIASES=false` (`--no-gateway-aliases`) for raw IDs.
-- **Custom mapping (`DEVIN_MODEL_MAP`):** Map any Claude Desktop-compatible ID in `.env` (for example `DEVIN_MODEL_MAP={"anthropic/dp-v4-pro-high":"deepseek-v4-pro-high"}`) if adding custom entries in **Model list**.
-
-## Connect to Claude Code
-
-Add to `~/.claude/settings.json`:
-
-```json
-{
-  "env": {
-    "ANTHROPIC_BASE_URL": "http://127.0.0.1:8787",
-    "ANTHROPIC_AUTH_TOKEN": "devin-local"
-  }
-}
-```
-
-## Scripts
+## Building from Source
 
 ```bash
-npm run typecheck   # tsc --noEmit
-npm run build       # compile src/*.ts -> dist/*.js
-npm test            # run tsx --test test/*.test.ts
-npm run dev         # run directly via tsx
-npm start           # run compiled dist/index.js
+# Node.js CLI
+npm run typecheck
+npm run build
+npm test
+
+# Desktop App (requires Rust >= 1.77 and Node >= 20)
+cd desktop
+npm install
+npm run tauri build
 ```
+
+## License
+
+[MIT](LICENSE)

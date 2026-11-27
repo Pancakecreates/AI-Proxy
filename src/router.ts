@@ -40,7 +40,34 @@ function splitQualifiedId(slug: string): { prefix: string; rest: string } | null
       return { prefix: slug.slice(0, secondColon + 1), rest: slug.slice(secondColon + 1) };
     }
   }
-  for (const prefix of ["oc-go.", "oc-free.", "oc.", "grok.", "codex.", "oc:", "grok:", "codex:"]) {
+  if (slug.startsWith("acp-")) {
+    const dot = slug.indexOf(".", 4);
+    if (dot > 4) {
+      return { prefix: slug.slice(0, dot + 1), rest: slug.slice(dot + 1) };
+    }
+  }
+  for (const prefix of [
+    "oc-go.",
+    "oc-free.",
+    "oc.",
+    "grok.",
+    "codex.",
+    "copilot.",
+    "cursor.",
+    "cline.",
+    "mistral.",
+    "kimi.",
+    "hermes.",
+    "oc:",
+    "grok:",
+    "codex:",
+    "copilot:",
+    "cursor:",
+    "cline:",
+    "mistral:",
+    "kimi:",
+    "hermes:",
+  ]) {
     if (slug.startsWith(prefix)) {
       return { prefix, rest: slug.slice(prefix.length) };
     }
@@ -49,8 +76,9 @@ function splitQualifiedId(slug: string): { prefix: string; rest: string } | null
 }
 
 /**
- * Coordinates multiple AI backends (Devin, Antigravity accounts, OpenCode, Grok, Codex)
- * behind a unified Anthropic /v1/models and /v1/messages surface.
+ * Coordinates multiple AI backends (Devin, Antigravity, OpenCode, Grok, Codex,
+ * Copilot, Cursor, Cline, Mistral, Kimi, Hermes, and Custom ACP agents)
+ * behind unified Anthropic & OpenAI HTTP endpoints.
  */
 export class BackendRouter {
   readonly #backends: ProxyBackend[];

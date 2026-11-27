@@ -105,7 +105,21 @@ export interface AppSettings {
   minimizeToTray: boolean;
   autoStartProxy: boolean;
   autostartOs: boolean;
+  checkUpdatesOnStart?: boolean;
   language: string;
+}
+
+export interface AppUpdateInfo {
+  currentVersion: string;
+  latestVersion: string;
+  hasUpdate: boolean;
+  releaseUrl: string;
+  releaseNotes: string;
+  assetName: string | null;
+  assetUrl: string | null;
+  assetSize: number | null;
+  publishedAt: string | null;
+  checkedAt: string;
 }
 
 export interface BackendModelEntry {

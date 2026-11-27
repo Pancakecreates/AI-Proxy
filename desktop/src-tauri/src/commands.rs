@@ -797,4 +797,19 @@ pub fn hide_main_window(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+pub async fn check_app_update() -> Result<crate::updater::AppUpdateInfo, String> {
+    crate::updater::check_for_updates().await
+}
+
+#[tauri::command]
+pub async fn download_and_launch_update(
+    app: AppHandle,
+    asset_url: Option<String>,
+    asset_name: Option<String>,
+    release_url: String,
+) -> Result<String, String> {
+    crate::updater::download_and_launch_update(&app, asset_url, asset_name, release_url).await
+}
+
 

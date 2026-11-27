@@ -632,9 +632,6 @@ export function formatAnthropicModelsList(
   };
 }
 
-/**
- * Format multi-backend model catalog as Anthropic GET /v1/models payload.
- */
 export function formatMultiBackendModelsList(
   models: readonly BackendModelEntry[],
   defaultModel: string,
@@ -704,5 +701,58 @@ export function formatMultiBackendModelsList(
     has_more: false,
     first_id: data[0]?.id ?? null,
     last_id: data[data.length - 1]?.id ?? null,
+  };
+}
+
+export interface OpenAIModelInfo {
+  id: string;
+  object: "model";
+  created: number;
+  owned_by: string;
+  display_name?: string;
+  description?: string;
+  context_window?: number;
+}
+
+export interface OpenAIModelsListResponse {
+  object: "list";
+  data: OpenAIModelInfo[];
+}
+
+/**
+ * Format multi-backend model catalog (or Devin fallback) as OpenAI GET /v1/models payload.
+ */
+export function formatOpenAIModelsList(
+  models: readonly BackendModelEntry[],
+  defaultModel: string,
+): OpenAIModelsListResponse {
+  const created = 1767225600;
+  if (models.length === 0) {
+    return {
+      object: "list",
+      data: [
+        {
+          id: defaultModel,
+          object: "model",
+          created,
+          owned_by: "devin",
+          display_name: defaultModel,
+          description: `Devin: ${defaultModel}`,
+          context_window: inferMaxInputTokens(defaultModel),
+        },
+      ],
+    };
+  }
+  return {
+    object: "list",
+    data: models.map((model) => ({
+      id: model.qualifiedId,
+      object: "model",
+      created,
+      owned_by: model.backendKind,
+      display_name: model.name,
+      description: (model.description ?? `${model.backendLabel}: ${model.nativeId}`).slice(0, 120),
+      context_window: inferMaxInputTokens(model.nativeId),
+    })),
   };
 }

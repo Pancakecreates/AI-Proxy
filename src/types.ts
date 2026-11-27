@@ -4,8 +4,31 @@ export type ThoughtConfigId = "thought_level" | "effort" | "reasoning_effort";
 export type SpeedMode = "standard" | "fast" | "ultrafast";
 export type ShowToolsMode = "thinking" | "text" | "none";
 export type ProcessModel = "in-process" | "daemon";
-export type BackendKind = "devin" | "antigravity" | "opencode" | "grok" | "codex";
+export type BackendKind =
+  | "devin"
+  | "antigravity"
+  | "opencode"
+  | "grok"
+  | "codex"
+  | "copilot"
+  | "cursor"
+  | "cline"
+  | "mistral"
+  | "kimi"
+  | "hermes"
+  | "custom";
 export type OpenCodeFilterMode = "go-free" | "all" | "custom";
+
+export interface CustomAcpAgentConfig {
+  id: string;
+  name: string;
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+  cwd?: string;
+  authMethodId?: string;
+  enabled?: boolean;
+}
 
 export interface AntigravityAccountConfig {
   id: string;
@@ -48,8 +71,25 @@ export interface ProxyConfig {
   opencodeProviders?: string[];
   enableGrok?: boolean;
   grokPath?: string;
+  xaiApiKey?: string;
   enableCodex?: boolean;
   codexPath?: string;
+  enableAnthropic?: boolean;
+  enableOpenai?: boolean;
+  openaiPort?: number | null;
+  enableCopilot?: boolean;
+  copilotPath?: string;
+  enableCursor?: boolean;
+  cursorPath?: string;
+  enableCline?: boolean;
+  clinePath?: string;
+  enableMistral?: boolean;
+  mistralPath?: string;
+  enableKimi?: boolean;
+  kimiPath?: string;
+  enableHermes?: boolean;
+  hermesPath?: string;
+  customAcpAgents?: CustomAcpAgentConfig[];
 }
 
 export interface AcpJsonRpcError {

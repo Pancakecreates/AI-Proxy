@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import type {
   AppSettings,
+  AppUpdateInfo,
   BackendModelEntry,
   DetectedRuntimes,
   ProxyRuntimeStatus,
@@ -47,6 +48,7 @@ export function App() {
   const [usage, setUsage] = useState<UsageSummary | null>(null);
   const [warmingUp, setWarmingUp] = useState(false);
   const [chatPreselectModel, setChatPreselectModel] = useState<string | null>(null);
+  const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo | null>(null);
 
   const loadAll = async (usageDays = 30) => {
     try {
@@ -82,6 +84,17 @@ export function App() {
       u2.then((f) => f()).catch(() => {});
     };
   }, []);
+
+  // Silent update check at startup if enabled
+  useEffect(() => {
+    if (!settings || settings.checkUpdatesOnStart === false) return;
+    const timer = setTimeout(() => {
+      invoke<AppUpdateInfo>("check_app_update")
+        .then((info) => setUpdateInfo(info))
+        .catch(() => {});
+    }, 3000);
+    return () => clearTimeout(timer);
+  }, [settings?.checkUpdatesOnStart]);
 
   // Apply theme & accent onto <html>
   useEffect(() => {
@@ -156,6 +169,8 @@ export function App() {
       <TitleBar
         status={status}
         theme={settings.theme}
+        updateInfo={updateInfo}
+        onOpenUpdates={() => setTab("settings")}
         onCycleTheme={handleCycleTheme}
         onToggleProxy={handleToggleProxy}
       />
@@ -248,6 +263,8 @@ export function App() {
           {tab === "settings" && (
             <SettingsView
               settings={settings}
+              updateInfo={updateInfo}
+              onUpdateChecked={setUpdateInfo}
               onSave={handleSaveSettings}
               onToggleAutostart={handleToggleAutostart}
             />

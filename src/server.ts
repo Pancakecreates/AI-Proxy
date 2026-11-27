@@ -2,7 +2,8 @@ import http, { type IncomingMessage, type Server, type ServerResponse } from "no
 import { resolve } from "node:path";
 import type { AcpClient } from "./acp-client.js";
 import { estimateInputTokens, handleMessagesRequest, sendAnthropicError, type TurnRunner } from "./anthropic.js";
-import { formatAnthropicModelsList, formatMultiBackendModelsList } from "./models.js";
+import { formatAnthropicModelsList, formatMultiBackendModelsList, formatOpenAIModelsList } from "./models.js";
+import { handleOpenAIChatRequest, handleOpenAIResponsesRequest, sendOpenAIError } from "./openai.js";
 import type { BackendRouter } from "./router.js";
 import type { SessionManager } from "./sessions.js";
 import type { AnthropicMessagesRequest, ProxyConfig } from "./types.js";
@@ -79,14 +80,15 @@ function resolveRequestCwd(req: IncomingMessage, defaultCwd: string): string {
 
 export function createProxyServer(
   deps:
-    | { config: ProxyConfig; router: BackendRouter }
-    | { config: ProxyConfig; acp: AcpClient; sessions: SessionManager },
+    | { config: ProxyConfig; router: BackendRouter; forceOpenAI?: boolean }
+    | { config: ProxyConfig; acp: AcpClient; sessions: SessionManager; forceOpenAI?: boolean },
 ): Server {
   const { config } = deps;
   const router = "router" in deps ? deps.router : null;
   const legacyAcp = "acp" in deps ? deps.acp : null;
   const legacySessions = "sessions" in deps ? deps.sessions : null;
   const turnRunner: TurnRunner = router ?? legacySessions!;
+  const forceOpenAI = Boolean(deps.forceOpenAI);
 
   const server = http.createServer(async (req, res) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
@@ -129,36 +131,51 @@ export function createProxyServer(
     }
 
     if (!isAuthorized(req, config.apiKey)) {
-      sendAnthropicError(res, 401, "authentication_error", "Invalid API key.");
+      if (forceOpenAI || path.startsWith("/openai/") || path.includes("chat/completions") || path.includes("responses")) {
+        sendOpenAIError(res, 401, "invalid_request_error", "Invalid API key.");
+      } else {
+        sendAnthropicError(res, 401, "authentication_error", "Invalid API key.");
+      }
       return;
     }
 
-    if (req.method === "GET" && (path === "/v1/models" || path === "/models")) {
+    if (req.method === "GET" && (path === "/v1/models" || path === "/models" || path === "/openai/v1/models")) {
       try {
         const refresh = url.searchParams.get("refresh") === "1";
         const rawIds = url.searchParams.get("raw") === "1";
+        const isOpenaiFormat =
+          forceOpenAI || url.searchParams.get("format") === "openai" || path.startsWith("/openai/");
+
         if (router) {
           if (refresh || router.listModels().length === 0) {
             await router.warmUp(refresh);
           }
-          sendJson(
-            res,
-            200,
-            formatMultiBackendModelsList(router.listModels(), config.defaultModel, {
-              gatewayAliases: config.gatewayAliases && !rawIds,
-            }),
-          );
+          const payload = isOpenaiFormat
+            ? formatOpenAIModelsList(router.listModels(), config.defaultModel)
+            : formatMultiBackendModelsList(router.listModels(), config.defaultModel, {
+                gatewayAliases: config.gatewayAliases && !rawIds,
+              });
+          sendJson(res, 200, payload);
         } else {
           if (refresh || legacySessions!.catalog.models.length === 0) {
             await legacySessions!.warmUp(refresh);
           }
-          sendJson(
-            res,
-            200,
-            formatAnthropicModelsList(legacySessions!.catalog.models, config.defaultModel, {
-              gatewayAliases: config.gatewayAliases && !rawIds,
-            }),
-          );
+          const payload = isOpenaiFormat
+            ? formatOpenAIModelsList(
+                legacySessions!.catalog.models.map((m) => ({
+                  ...m,
+                  backendKey: "devin",
+                  backendKind: "devin",
+                  backendLabel: "Devin",
+                  nativeId: m.id,
+                  qualifiedId: m.id,
+                })),
+                config.defaultModel,
+              )
+            : formatAnthropicModelsList(legacySessions!.catalog.models, config.defaultModel, {
+                gatewayAliases: config.gatewayAliases && !rawIds,
+              });
+          sendJson(res, 200, payload);
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : "Failed to load models from backends.";
@@ -167,7 +184,11 @@ export function createProxyServer(
       return;
     }
 
-    if (req.method === "POST" && (path === "/v1/messages/count_tokens" || path === "/messages/count_tokens")) {
+    if (
+      config.enableAnthropic !== false &&
+      req.method === "POST" &&
+      (path === "/v1/messages/count_tokens" || path === "/messages/count_tokens")
+    ) {
       try {
         const body = await readJsonBody<Partial<AnthropicMessagesRequest>>(req);
         sendJson(res, 200, { input_tokens: estimateInputTokens(body) });
@@ -179,7 +200,7 @@ export function createProxyServer(
       return;
     }
 
-    if (req.method === "POST" && (path === "/v1/messages" || path === "/messages")) {
+    if (config.enableAnthropic !== false && req.method === "POST" && (path === "/v1/messages" || path === "/messages")) {
       let body: AnthropicMessagesRequest;
       try {
         body = await readJsonBody<AnthropicMessagesRequest>(req);
@@ -199,6 +220,52 @@ export function createProxyServer(
       await handleMessagesRequest(req, res, body, {
         sessions: turnRunner,
         cwd: resolveRequestCwd(req, config.cwd),
+      });
+      return;
+    }
+
+    if (
+      config.enableOpenai !== false &&
+      req.method === "POST" &&
+      (path === "/v1/chat/completions" || path === "/chat/completions" || path === "/openai/v1/chat/completions")
+    ) {
+      let body: Record<string, unknown>;
+      try {
+        body = await readJsonBody<Record<string, unknown>>(req);
+      } catch (err) {
+        const status = err instanceof HttpPayloadError ? err.status : 400;
+        const message = err instanceof Error ? err.message : "Invalid request.";
+        sendOpenAIError(res, status, "invalid_request_error", message);
+        return;
+      }
+
+      await handleOpenAIChatRequest(req, res, body, {
+        sessions: turnRunner,
+        cwd: resolveRequestCwd(req, config.cwd),
+        defaultModel: config.defaultModel,
+      });
+      return;
+    }
+
+    if (
+      config.enableOpenai !== false &&
+      req.method === "POST" &&
+      (path === "/v1/responses" || path === "/responses" || path === "/openai/v1/responses")
+    ) {
+      let body: Record<string, unknown>;
+      try {
+        body = await readJsonBody<Record<string, unknown>>(req);
+      } catch (err) {
+        const status = err instanceof HttpPayloadError ? err.status : 400;
+        const message = err instanceof Error ? err.message : "Invalid request.";
+        sendOpenAIError(res, status, "invalid_request_error", message);
+        return;
+      }
+
+      await handleOpenAIResponsesRequest(req, res, body, {
+        sessions: turnRunner,
+        cwd: resolveRequestCwd(req, config.cwd),
+        defaultModel: config.defaultModel,
       });
       return;
     }

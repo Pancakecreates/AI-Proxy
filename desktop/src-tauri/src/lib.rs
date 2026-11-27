@@ -10,6 +10,7 @@ mod quota;
 mod router;
 mod runtime_installer;
 mod types;
+mod updater;
 
 use crate::acp_client::LogFn;
 use crate::commands::AppState;
@@ -185,6 +186,8 @@ pub fn run() {
             commands::set_autostart,
             commands::get_autostart,
             commands::hide_main_window,
+            commands::check_app_update,
+            commands::download_and_launch_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

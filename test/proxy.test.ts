@@ -807,6 +807,179 @@ test("Multi-backend router routes across Antigravity accounts, OpenCode Go/Free,
     const codexJson = (await codexRes.json()) as { content: Array<{ type: string; text?: string; thinking?: string }> };
     assert.equal(codexJson.content.find((c) => c.type === "thinking")?.thinking, "Codex thinking...");
     assert.match(codexJson.content.find((c) => c.type === "text")?.text ?? "", /^thr-1:gpt-6-luna:effort=high:ping codex$/);
+
+    // OpenAI /openai/v1/models
+    const oaiModelsRes = await fetch(`${baseUrl}/openai/v1/models`);
+    assert.equal(oaiModelsRes.status, 200);
+    const oaiModelsJson = (await oaiModelsRes.json()) as { object: string; data: Array<{ id: string; owned_by: string }> };
+    assert.equal(oaiModelsJson.object, "list");
+    assert.equal(oaiModelsJson.data.length, 6);
+    assert.ok(oaiModelsJson.data.some((m) => m.id === "codex.gpt-6-luna" && m.owned_by === "codex"));
+
+    // OpenAI POST /v1/chat/completions (non-stream + stream)
+    const chatRes = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "grok.grok-4.7",
+        reasoning_effort: "high",
+        messages: [
+          { role: "system", content: "Be brief." },
+          { role: "user", content: "ping oai chat" },
+        ],
+      }),
+    });
+    assert.equal(chatRes.status, 200);
+    const chatJson = (await chatRes.json()) as {
+      object: string;
+      choices: Array<{ message: { content: string }; finish_reason: string }>;
+      usage: { total_tokens: number };
+    };
+    assert.equal(chatJson.object, "chat.completion");
+    assert.equal(chatJson.choices[0]?.finish_reason, "stop");
+    assert.match(chatJson.choices[0]?.message.content ?? "", /grok:grok-4\.7:reasoning_effort=high:[\s\S]*Be brief\.[\s\S]*ping oai chat$/);
+    assert.ok(chatJson.usage.total_tokens > 0);
+
+    const chatStreamRes = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "agy-acc1.gemini-4-hydrogen",
+        stream: true,
+        messages: [{ role: "user", content: "stream oai chat" }],
+      }),
+    });
+    assert.equal(chatStreamRes.status, 200);
+    const chatStreamText = await chatStreamRes.text();
+    assert.match(chatStreamText, /"object":"chat\.completion\.chunk"/);
+    assert.match(chatStreamText, /agy1:gemini-4-hydrogen/);
+    assert.match(chatStreamText, /data: \[DONE\]/);
+
+    // OpenAI POST /v1/responses (Codex Responses API, non-stream + stream)
+    const respRes = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "codex.gpt-6-luna",
+        instructions: "Act as helper.",
+        reasoning: { effort: "medium" },
+        input: "ping responses",
+      }),
+    });
+    assert.equal(respRes.status, 200);
+    const respJson = (await respRes.json()) as { object: string; status: string; output_text: string };
+    assert.equal(respJson.object, "response");
+    assert.equal(respJson.status, "completed");
+    assert.match(respJson.output_text, /^thr-\d+:gpt-6-luna:effort=medium:ping responses$/);
+
+    const respStreamRes = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "codex.gpt-6-luna",
+        stream: true,
+        input: [{ type: "message", role: "user", content: "stream responses" }],
+      }),
+    });
+    assert.equal(respStreamRes.status, 200);
+    const respStreamText = await respStreamRes.text();
+    assert.match(respStreamText, /event: response\.created/);
+    assert.match(respStreamText, /event: response\.output_text\.delta/);
+    assert.match(respStreamText, /event: response\.completed/);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await router.shutdown();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("Additional OpenBot ACP backends (Copilot, Custom ACP) route via prefix", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "extra-acp-test-"));
+  const copilotScript = createFakeProviderAcpScript(dir, "fake-copilot.mjs", {
+    thoughtId: "effort",
+    thoughtValues: ["low", "medium", "high"],
+    models: [{ value: "claude-sonnet-4.5", name: "Claude Sonnet 4.5" }],
+    tag: "copilot",
+  });
+  const customScript = createFakeProviderAcpScript(dir, "fake-custom.mjs", {
+    thoughtId: "thought_level",
+    thoughtValues: ["low", "high"],
+    models: [{ value: "my-local-model", name: "My Local Model" }],
+    tag: "myacp",
+  });
+
+  const config: ProxyConfig = {
+    help: false,
+    host: "127.0.0.1",
+    port: 0,
+    devinPath: process.execPath,
+    cwd: dir,
+    mode: "bypass",
+    defaultModel: "claude-sonnet-4.5",
+    thoughtLevel: null,
+    speed: null,
+    showTools: "thinking",
+    processModel: "in-process",
+    apiKey: null,
+    modelMap: {},
+    gatewayAliases: true,
+    requestTimeoutMs: 10_000,
+    startupTimeoutMs: 10_000,
+    idleSessionTtlMs: 60_000,
+    maxSessions: 4,
+    debug: false,
+  };
+
+  const copilotAcp = new AcpClient(config, { label: "Copilot", executable: process.execPath, args: [copilotScript], supportsCloseSession: false });
+  const customAcp = new AcpClient(config, { label: "MyACP", executable: process.execPath, args: [customScript], supportsCloseSession: false });
+
+  const router = new BackendRouter(
+    [
+      new AcpProxyBackend({
+        key: "copilot",
+        kind: "copilot",
+        label: "Copilot",
+        acp: copilotAcp,
+        sessions: new SessionManager(copilotAcp, config, { backendKind: "copilot", backendLabel: "Copilot" }),
+        qualifiedPrefix: "copilot.",
+      }),
+      new AcpProxyBackend({
+        key: "acp-local",
+        kind: "custom",
+        label: "MyACP",
+        acp: customAcp,
+        sessions: new SessionManager(customAcp, config, { backendKind: "custom", backendLabel: "MyACP" }),
+        qualifiedPrefix: "acp-local.",
+      }),
+    ],
+    config,
+  );
+
+  const server = createProxyServer({ config, router, forceOpenAI: true });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as AddressInfo;
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  try {
+    const modelsRes = await fetch(`${baseUrl}/v1/models`);
+    assert.equal(modelsRes.status, 200);
+    const modelsJson = (await modelsRes.json()) as { object: string; data: Array<{ id: string }> };
+    assert.equal(modelsJson.object, "list");
+    assert.deepEqual(
+      modelsJson.data.map((m) => m.id),
+      ["copilot.claude-sonnet-4.5", "acp-local.my-local-model"],
+    );
+
+    const r1 = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "acp-local.my-local-model-high",
+        messages: [{ role: "user", content: "hello custom" }],
+      }),
+    });
+    const j1 = (await r1.json()) as { choices: Array<{ message: { content: string } }> };
+    assert.match(j1.choices[0]?.message.content ?? "", /^myacp:my-local-model:thought_level=high:hello custom$/);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await router.shutdown();

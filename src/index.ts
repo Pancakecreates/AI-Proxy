@@ -141,9 +141,8 @@ export function buildBackends(config: ProxyConfig): ProxyBackend[] {
   }
 
   if (config.enableGrok && config.grokPath) {
-    const grokAuthMethods = process.env.XAI_API_KEY?.trim()
-      ? ["xai.api_key", "cached_token"]
-      : ["cached_token"];
+    const xaiKey = config.xaiApiKey ?? process.env.XAI_API_KEY?.trim();
+    const grokAuthMethods = xaiKey ? ["xai.api_key", "cached_token"] : ["cached_token"];
     const grokAcp = new AcpClient(config, {
       label: "Grok",
       executable: config.grokPath,
@@ -156,6 +155,7 @@ export function buildBackends(config: ProxyConfig): ProxyBackend[] {
       ],
       env: {
         GROK_OAUTH2_REFERRER: "openbot",
+        ...(xaiKey ? { XAI_API_KEY: xaiKey } : {}),
       },
       authMethodIds: grokAuthMethods,
       supportsCloseSession: false,
@@ -188,6 +188,137 @@ export function buildBackends(config: ProxyConfig): ProxyBackend[] {
     );
   }
 
+  const extraAcpBackends: Array<{
+    enabled?: boolean;
+    path?: string;
+    key: string;
+    kind: "copilot" | "cursor" | "cline" | "mistral" | "kimi" | "hermes";
+    label: string;
+    args: string[];
+    env?: Record<string, string | undefined>;
+    authMethodIds?: string[];
+    descPrefix: string;
+  }> = [
+    {
+      enabled: config.enableCopilot,
+      path: config.copilotPath,
+      key: "copilot",
+      kind: "copilot",
+      label: "Copilot",
+      args: ["--acp", "--no-auto-update"],
+      descPrefix: "GitHub Copilot",
+    },
+    {
+      enabled: config.enableCursor,
+      path: config.cursorPath,
+      key: "cursor",
+      kind: "cursor",
+      label: "Cursor",
+      args: ["acp"],
+      descPrefix: "Cursor",
+    },
+    {
+      enabled: config.enableCline,
+      path: config.clinePath,
+      key: "cline",
+      kind: "cline",
+      label: "Cline",
+      args: ["--acp"],
+      env: { CLINE_SESSION_BACKEND_MODE: "local", CLINE_NO_AUTO_UPDATE: "1" },
+      authMethodIds: ["cline"],
+      descPrefix: "Cline",
+    },
+    {
+      enabled: config.enableMistral,
+      path: config.mistralPath,
+      key: "mistral",
+      kind: "mistral",
+      label: "Mistral Vibe",
+      args: [],
+      env: { VIBE_ENABLE_TELEMETRY: "false", VIBE_EXPERIMENTAL_ENABLE_MODEL_CATALOG: "true" },
+      authMethodIds: ["browser-auth"],
+      descPrefix: "Mistral",
+    },
+    {
+      enabled: config.enableKimi,
+      path: config.kimiPath,
+      key: "kimi",
+      kind: "kimi",
+      label: "Kimi",
+      args: ["acp"],
+      env: { KIMI_CLI_NO_AUTO_UPDATE: "1" },
+      descPrefix: "Kimi",
+    },
+    {
+      enabled: config.enableHermes,
+      path: config.hermesPath,
+      key: "hermes",
+      kind: "hermes",
+      label: "Hermes",
+      args: ["acp"],
+      descPrefix: "Hermes",
+    },
+  ];
+
+  for (const spec of extraAcpBackends) {
+    if (!spec.enabled || !spec.path) continue;
+    const acp = new AcpClient(config, {
+      label: spec.label,
+      executable: spec.path,
+      args: spec.args,
+      env: spec.env,
+      authMethodIds: spec.authMethodIds,
+      supportsCloseSession: false,
+      closeForceMeta: false,
+    });
+    const sessions = new SessionManager(acp, config, {
+      backendKind: spec.kind,
+      backendLabel: spec.label,
+    });
+    backends.push(
+      new AcpProxyBackend({
+        key: spec.key,
+        kind: spec.kind,
+        label: spec.label,
+        acp,
+        sessions,
+        qualifiedPrefix: `${spec.key}.`,
+        formatDisplayName: (m) => m.name,
+        formatDescription: (m) => `${spec.descPrefix}: ${m.id}`.slice(0, 100),
+      }),
+    );
+  }
+
+  for (const custom of config.customAcpAgents ?? []) {
+    if (custom.enabled === false || !custom.command.trim()) continue;
+    const label = custom.name || custom.id;
+    const acp = new AcpClient(config, {
+      label,
+      executable: custom.command,
+      args: custom.args ?? [],
+      env: custom.env,
+      authMethodIds: custom.authMethodId ? [custom.authMethodId] : undefined,
+      supportsCloseSession: false,
+      closeForceMeta: false,
+    });
+    const sessions = new SessionManager(acp, config, {
+      backendKind: "custom",
+      backendLabel: label,
+    });
+    backends.push(
+      new AcpProxyBackend({
+        key: `acp-${custom.id}`,
+        kind: "custom",
+        label,
+        acp,
+        sessions,
+        qualifiedPrefix: `acp-${custom.id}.`,
+        formatDisplayName: (m) => m.name,
+        formatDescription: (m) => `${label}: ${m.id}`.slice(0, 100),
+      }),
+    );
+  }
+
   return backends;
 }
 
@@ -214,7 +345,25 @@ async function main(): Promise<void> {
   const port = bound?.port ?? config.port;
   const baseUrl = `http://${config.host}:${port}`;
 
+  let openaiServer: ReturnType<typeof createProxyServer> | null = null;
+  let openaiBaseUrl = `${baseUrl}/openai/v1`;
+  if (config.enableOpenai !== false && config.openaiPort && config.openaiPort !== port) {
+    openaiServer = createProxyServer({ config, router, forceOpenAI: true });
+    await new Promise<void>((resolve, reject) => {
+      openaiServer!.once("error", reject);
+      openaiServer!.listen(config.openaiPort!, config.host, () => {
+        openaiServer!.off("error", reject);
+        resolve();
+      });
+    });
+    const ob = openaiServer.address() as AddressInfo | null;
+    openaiBaseUrl = `http://${config.host}:${ob?.port ?? config.openaiPort}/v1`;
+  }
+
   console.log(`AI-Anthropic-Proxy listening on ${baseUrl}`);
+  if (config.enableOpenai !== false) {
+    console.log(`OpenAI / Codex gateway: ${openaiBaseUrl}`);
+  }
   console.log(`Workspace CWD: ${config.cwd} (mode: ${config.mode})`);
   console.log(`Enabled backends (${backends.length}): ${backends.map((b) => b.label).join(", ") || "none"}`);
 
@@ -239,7 +388,11 @@ async function main(): Promise<void> {
   console.log(`  API Key: any string (or your PROXY_API_KEY)`);
   console.log(`\nClaude Code (~/.claude/settings.json or shell env):`);
   console.log(`  ANTHROPIC_BASE_URL=${baseUrl}`);
-  console.log(`  ANTHROPIC_AUTH_TOKEN=devin-local`);
+  console.log(`  ANTHROPIC_AUTH_TOKEN=local-proxy`);
+  if (config.enableOpenai !== false) {
+    console.log(`\nOpenAI / Codex CLI:`);
+    console.log(`  OPENAI_BASE_URL=${openaiBaseUrl}`);
+  }
 
   let shuttingDown = false;
   const shutdown = async () => {
@@ -247,6 +400,9 @@ async function main(): Promise<void> {
     shuttingDown = true;
     console.log("\nShutting down...");
     await new Promise<void>((resolve) => server.close(() => resolve()));
+    if (openaiServer) {
+      await new Promise<void>((resolve) => openaiServer!.close(() => resolve()));
+    }
     await router.shutdown();
     process.exit(0);
   };

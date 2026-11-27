@@ -307,6 +307,8 @@ pub struct AppSettings {
     pub minimize_to_tray: bool,
     pub auto_start_proxy: bool,
     pub autostart_os: bool,
+    #[serde(default = "default_true")]
+    pub check_updates_on_start: bool,
     pub language: String,
 }
 
@@ -375,6 +377,7 @@ impl Default for AppSettings {
             minimize_to_tray: true,
             auto_start_proxy: true,
             autostart_os: false,
+            check_updates_on_start: true,
             language: "ru".to_string(),
         }
     }

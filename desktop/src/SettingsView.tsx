@@ -1,22 +1,69 @@
 import React, { useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { FolderOpen, Save, Check } from "lucide-react";
-import type { AppSettings, DevinMode, OpenCodeFilterMode, ProcessModel, ShowToolsMode, SpeedMode, ThoughtLevel } from "./types";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { FolderOpen, Save, Check, RefreshCw, Download, ExternalLink, Loader2 } from "lucide-react";
+import type { AppSettings, AppUpdateInfo, DevinMode, OpenCodeFilterMode, ProcessModel, ShowToolsMode, SpeedMode, ThoughtLevel } from "./types";
 
 interface SettingsViewProps {
   settings: AppSettings;
+  updateInfo: AppUpdateInfo | null;
+  onUpdateChecked: (info: AppUpdateInfo | null) => void;
   onSave: (next: AppSettings, restart: boolean) => Promise<void>;
   onToggleAutostart: (enabled: boolean) => Promise<void>;
 }
 
 export const SettingsView: React.FC<SettingsViewProps> = ({
   settings,
+  updateInfo,
+  onUpdateChecked,
   onSave,
   onToggleAutostart,
 }) => {
   const [draft, setDraft] = useState<AppSettings>(settings);
   const [saving, setSaving] = useState(false);
   const [savedToast, setSavedToast] = useState(false);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [installingUpdate, setInstallingUpdate] = useState(false);
+  const [updateMsg, setUpdateMsg] = useState<string | null>(null);
+  const [updateErr, setUpdateErr] = useState<string | null>(null);
+
+  const handleCheckUpdate = async () => {
+    setCheckingUpdate(true);
+    setUpdateErr(null);
+    setUpdateMsg(null);
+    try {
+      const info = await invoke<AppUpdateInfo>("check_app_update");
+      onUpdateChecked(info);
+      setUpdateMsg(
+        info.hasUpdate
+          ? `Найдена новая версия v${info.latestVersion} (текущая v${info.currentVersion})`
+          : `Установлена актуальная версия v${info.currentVersion}`,
+      );
+    } catch (e) {
+      setUpdateErr(String(e));
+    } finally {
+      setCheckingUpdate(false);
+    }
+  };
+
+  const handleDownloadUpdate = async () => {
+    if (!updateInfo) return;
+    setInstallingUpdate(true);
+    setUpdateErr(null);
+    try {
+      const msg = await invoke<string>("download_and_launch_update", {
+        assetUrl: updateInfo.assetUrl,
+        assetName: updateInfo.assetName,
+        releaseUrl: updateInfo.releaseUrl,
+      });
+      setUpdateMsg(msg);
+    } catch (e) {
+      setUpdateErr(String(e));
+    } finally {
+      setInstallingUpdate(false);
+    }
+  };
 
   const pickCwd = async () => {
     const dir = await open({ directory: true, multiple: false, defaultPath: draft.cwd }).catch(() => null);
@@ -140,7 +187,68 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               />
               <span>Раскрывать блок мыслей в тест-чате</span>
             </label>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={draft.checkUpdatesOnStart ?? true}
+                onChange={(e) => setDraft({ ...draft, checkUpdatesOnStart: e.target.checked })}
+                className="accent-[var(--accent)] size-3.5"
+              />
+              <span>Проверять обновления на GitHub при запуске</span>
+            </label>
           </div>
+        </section>
+
+        {/* Updates */}
+        <section className="rounded-lg border bg-[var(--bg-elevated)] p-4 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="text-sm font-semibold">Обновления приложения</h2>
+              <p className="text-[11px] text-[var(--fg-muted)]">
+                Проверка новых релизов на GitHub и скачивание установщика под текущую ОС.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleCheckUpdate}
+                disabled={checkingUpdate}
+                className="inline-flex h-7 items-center gap-1.5 rounded-md border bg-[var(--bg)] px-2.5 text-xs hover:bg-[var(--bg-subtle)] disabled:opacity-50"
+              >
+                {checkingUpdate ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
+                <span>Проверить обновления</span>
+              </button>
+              {updateInfo?.hasUpdate && (
+                <button
+                  type="button"
+                  onClick={handleDownloadUpdate}
+                  disabled={installingUpdate}
+                  className="inline-flex h-7 items-center gap-1.5 rounded-md bg-[var(--accent)] px-3 text-xs font-medium text-[var(--accent-fg)] hover:opacity-90 disabled:opacity-50"
+                >
+                  {installingUpdate ? <Loader2 className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
+                  <span>Скачать и установить v{updateInfo.latestVersion}</span>
+                </button>
+              )}
+              {updateInfo?.releaseUrl && (
+                <button
+                  type="button"
+                  onClick={() => openUrl(updateInfo.releaseUrl).catch(() => {})}
+                  className="inline-flex h-7 items-center gap-1 rounded-md border bg-[var(--bg)] px-2 text-xs hover:bg-[var(--bg-subtle)]"
+                  title="Открыть на GitHub"
+                >
+                  <ExternalLink className="size-3" />
+                </button>
+              )}
+            </div>
+          </div>
+          {updateMsg && <p className="text-xs text-[var(--success)]">{updateMsg}</p>}
+          {updateErr && <p className="text-xs text-[var(--danger)]">{updateErr}</p>}
+          {updateInfo?.hasUpdate && updateInfo.assetName && (
+            <div className="text-[11px] text-[var(--fg-muted)] font-mono">
+              Файл: {updateInfo.assetName}
+              {updateInfo.assetSize ? ` (${(updateInfo.assetSize / (1024 * 1024)).toFixed(1)} МБ)` : ""}
+            </div>
+          )}
         </section>
 
         {/* HTTP Gateways */}

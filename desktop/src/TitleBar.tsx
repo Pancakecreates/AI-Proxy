@@ -11,12 +11,15 @@ import {
   Moon,
   Monitor,
   Loader2,
+  ArrowDownToLine,
 } from "lucide-react";
-import type { ProxyRuntimeStatus } from "./types";
+import type { AppUpdateInfo, ProxyRuntimeStatus } from "./types";
 
 interface TitleBarProps {
   status: ProxyRuntimeStatus | null;
   theme: "auto" | "dark" | "light";
+  updateInfo: AppUpdateInfo | null;
+  onOpenUpdates: () => void;
   onCycleTheme: () => void;
   onToggleProxy: () => void;
 }
@@ -24,6 +27,8 @@ interface TitleBarProps {
 export const TitleBar: React.FC<TitleBarProps> = ({
   status,
   theme,
+  updateInfo,
+  onOpenUpdates,
   onCycleTheme,
   onToggleProxy,
 }) => {
@@ -94,6 +99,17 @@ export const TitleBar: React.FC<TitleBarProps> = ({
 
       {/* Right: Quick controls + Custom Window Chrome Buttons */}
       <div className="flex h-full items-center gap-1">
+        {updateInfo?.hasUpdate && (
+          <button
+            type="button"
+            onClick={onOpenUpdates}
+            title={`Доступна версия v${updateInfo.latestVersion}`}
+            className="mr-1 inline-flex h-6 items-center gap-1 rounded-full border border-[var(--accent)]/40 bg-[var(--accent-soft)] px-2 text-[10px] font-medium text-[var(--accent)] hover:opacity-90"
+          >
+            <ArrowDownToLine className="size-3" />
+            <span>v{updateInfo.latestVersion}</span>
+          </button>
+        )}
         <button
           type="button"
           onClick={onToggleProxy}
