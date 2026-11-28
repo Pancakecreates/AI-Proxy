@@ -1392,6 +1392,7 @@ mod cancel_integration_tests {
                 }
                 Some("session/prompt") => {
                     prompt_id = id;
+                    append_child_event(&events_path, "prompt");
                     write_json_line(&mut stdout, json!({
                         "jsonrpc": "2.0",
                         "method": "session/update",
@@ -1461,9 +1462,11 @@ mod cancel_integration_tests {
             discovery_cwd: None,
         };
 
-        let mut app_settings = AppSettings::default();
-        app_settings.startup_timeout_ms = 5_000;
-        app_settings.request_timeout_ms = 5_000;
+        let app_settings = AppSettings {
+            startup_timeout_ms: 5_000,
+            request_timeout_ms: 5_000,
+            ..Default::default()
+        };
         let settings = Arc::new(RwLock::new(app_settings));
         let log: LogFn = Arc::new(|_, _, _| {});
         let backend = AcpBackend::new(cfg, settings, log);

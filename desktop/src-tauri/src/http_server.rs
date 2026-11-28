@@ -1,10 +1,11 @@
 use crate::acp_client::StreamEvent;
+use crate::cancel::CancelOnDrop;
 use crate::db::AppDb;
 use crate::models::{
     format_anthropic_models_list, format_openai_models_list, normalize_effort_value,
 };
 use crate::pricing::{calculate_costs, estimate_tokens_from_chars};
-use crate::router::{BackendRouter, RunTurnError};
+use crate::router::{BackendRouter, RunTurnError, RunTurnOutput};
 use crate::types::{
     AppSettings, ImageAttachment, NormalizedMessage, RequestLogEntry, UnifiedTurnRequest,
 };
@@ -83,6 +84,30 @@ fn openai_error(status: StatusCode, err_type: &str, message: &str) -> Response {
         })),
     )
         .into_response()
+}
+
+async fn run_nonstreaming_turn(
+    state: &HttpSharedState,
+    unified: UnifiedTurnRequest,
+) -> Result<RunTurnOutput, RunTurnError> {
+    let cancel_token = crate::cancel::CancelToken::new();
+    let router = state.router.clone();
+    let cancel_for_turn = cancel_token.clone();
+    let turn_task = tokio::spawn(async move {
+        router
+            .run_turn(unified, None, Some(cancel_for_turn))
+            .await
+    });
+    let mut cancel_guard = CancelOnDrop::new(cancel_token);
+
+    let result = match turn_task.await {
+        Ok(result) => result,
+        Err(err) => Err(RunTurnError::from(format!(
+            "Фоновая задача backend-turn завершилась с ошибкой: {err}"
+        ))),
+    };
+    cancel_guard.disarm();
+    result
 }
 
 fn record_turn_error(
@@ -426,7 +451,7 @@ async fn anthropic_messages_handler(
     let model_label = requested_model.unwrap_or_else(|| s.default_model.clone());
 
     if !is_stream {
-        match state.router.run_turn(unified, None, None).await {
+        match run_nonstreaming_turn(&state, unified).await {
             Ok(out) => {
                 let res = out.turn;
                 let bkey = out.backend_key;
@@ -863,7 +888,7 @@ async fn openai_chat_handler(
     let created = Utc::now().timestamp();
 
     if !is_stream {
-        match state.router.run_turn(unified, None, None).await {
+        match run_nonstreaming_turn(&state, unified).await {
             Ok(out) => {
                 let res = out.turn;
                 let bkey = out.backend_key;
@@ -1215,7 +1240,7 @@ async fn openai_responses_handler(
     let created_at = Utc::now().timestamp();
 
     if !is_stream {
-        match state.router.run_turn(unified, None, None).await {
+        match run_nonstreaming_turn(&state, unified).await {
             Ok(out) => {
                 let res = out.turn;
                 let bkey = out.backend_key;
@@ -1748,30 +1773,32 @@ mod tests {
     ) {
         let upstream = start_hanging_upstream(true).await;
 
-        let mut s = AppSettings::default();
-        s.api_key = Some("secret-123".into());
-        s.enable_devin = false;
-        s.enable_antigravity = false;
-        s.enable_opencode = false;
-        s.enable_grok = false;
-        s.enable_codex = false;
-        s.enable_copilot = false;
-        s.enable_cursor = false;
-        s.enable_cline = false;
-        s.enable_mistral = false;
-        s.enable_kimi = false;
-        s.enable_hermes = false;
-        s.external_providers = vec![crate::types::ExternalProviderConfig {
-            id: "test".into(),
-            display_name: "Test upstream".into(),
-            base_url: format!("http://{}", upstream.addr),
-            api_key: None,
-            enabled: true,
-            proxy_mode: crate::types::ProxyMode::Disabled,
-            proxy_url: None,
-            extra_headers: Default::default(),
-            max_output_tokens: None,
-        }];
+        let s = AppSettings {
+            api_key: Some("secret-123".into()),
+            enable_devin: false,
+            enable_antigravity: false,
+            enable_opencode: false,
+            enable_grok: false,
+            enable_codex: false,
+            enable_copilot: false,
+            enable_cursor: false,
+            enable_cline: false,
+            enable_mistral: false,
+            enable_kimi: false,
+            enable_hermes: false,
+            external_providers: vec![crate::types::ExternalProviderConfig {
+                id: "test".into(),
+                display_name: "Test upstream".into(),
+                base_url: format!("http://{}", upstream.addr),
+                api_key: None,
+                enabled: true,
+                proxy_mode: crate::types::ProxyMode::Disabled,
+                proxy_url: None,
+                extra_headers: Default::default(),
+                max_output_tokens: None,
+            }],
+            ..Default::default()
+        };
 
         let settings = Arc::new(RwLock::new(s));
         let log: LogFn = Arc::new(|_, _, _| {});
@@ -1800,7 +1827,7 @@ mod tests {
         (upstream, addr, model, server)
     }
 
-    async fn read_until_upstream_content<S, B, E>(stream: &mut S)
+    async fn read_until_stream_content<S, B, E>(stream: &mut S, needle: &str)
     where
         S: futures::Stream<Item = Result<B, E>> + Unpin,
         B: AsRef<[u8]>,
@@ -1815,12 +1842,21 @@ mod tests {
                 .expect("SSE stream ended before upstream content")
                 .expect("SSE chunk read failed");
             let text = String::from_utf8_lossy(chunk.as_ref());
-            if text.contains("\"hi\"") || text.contains("\\\"hi\\\"") || text.contains("\"content\":\"hi\"") {
+            if text.contains(&format!("\"{needle}\"")) {
                 saw_content = true;
                 break;
             }
         }
-        assert!(saw_content, "proxy did not forward content from the active upstream turn");
+        assert!(saw_content, "proxy did not forward expected streaming content: {needle}");
+    }
+
+    async fn read_until_upstream_content<S, B, E>(stream: &mut S)
+    where
+        S: futures::Stream<Item = Result<B, E>> + Unpin,
+        B: AsRef<[u8]>,
+        E: std::fmt::Debug,
+    {
+        read_until_stream_content(stream, "hi").await;
     }
 
     async fn assert_upstream_disconnects(mut upstream: HangingUpstream) {
@@ -1909,5 +1945,154 @@ mod tests {
         assert_upstream_disconnects(upstream).await;
         server.abort();
     }
+    async fn wait_for_fake_acp_event(path: &str, event: &str) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if std::fs::read_to_string(path)
+                .map(|contents| contents.lines().any(|line| line == event))
+                .unwrap_or(false)
+            {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "fake ACP event {event} did not appear; events: {:?}",
+                std::fs::read_to_string(path).unwrap_or_default()
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    }
+
+    async fn start_proxy_with_fake_acp(events_path: String) -> (std::net::SocketAddr, String, tokio::task::JoinHandle<()>) {
+        let mut env = std::collections::HashMap::new();
+        env.insert("AI_PROXY_FAKE_ACP_CHILD".to_string(), "1".to_string());
+        env.insert("AI_PROXY_FAKE_ACP_EVENTS".to_string(), events_path);
+        let exe = std::env::current_exe().expect("current test executable");
+
+        let s = AppSettings {
+            api_key: Some("secret-123".into()),
+            enable_devin: false,
+            enable_antigravity: false,
+            enable_opencode: false,
+            enable_grok: false,
+            enable_codex: false,
+            enable_copilot: false,
+            enable_cursor: false,
+            enable_cline: false,
+            enable_mistral: false,
+            enable_kimi: false,
+            enable_hermes: false,
+            startup_timeout_ms: 5_000,
+            request_timeout_ms: 5_000,
+            custom_acp_agents: vec![crate::types::CustomAcpAgentConfig {
+                id: "fake".into(),
+                name: "Fake ACP".into(),
+                command: exe.to_string_lossy().to_string(),
+                args: vec![
+                    "--nocapture".into(),
+                    "--exact".into(),
+                    "acp_client::cancel_integration_tests::fake_acp_cancel_child".into(),
+                ],
+                env,
+                cwd: Some(std::env::temp_dir().to_string_lossy().to_string()),
+                auth_method_id: None,
+                enabled: true,
+            }],
+            ..Default::default()
+        };
+
+        let settings = Arc::new(RwLock::new(s));
+        let log: LogFn = Arc::new(|_, _, _| {});
+        let router = BackendRouter::new(settings.clone(), log);
+        router.rebuild_backends().await;
+        let models = router.warm_up(true).await;
+        assert!(!models.is_empty(), "fake ACP did not expose models");
+        let model = models[0].gateway_id.clone();
+
+        let dir = std::env::temp_dir().join(format!("ai-proxy-http-test-{}", uuid::Uuid::new_v4()));
+        let db = Arc::new(AppDb::open(&dir.join("test.db")).unwrap());
+        let state = HttpSharedState {
+            router,
+            settings,
+            db,
+            on_request_log: None,
+            force_openai: false,
+        };
+        let app = build_http_router(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        (addr, model, server)
+    }
+
+
+    #[tokio::test]
+    async fn anthropic_streaming_client_disconnect_cancels_acp_turn() {
+        let events_path = std::env::temp_dir()
+            .join(format!("ai-proxy-http-acp-stream-cancel-{}.log", uuid::Uuid::new_v4()))
+            .to_string_lossy()
+            .to_string();
+        let (addr, model, server) = start_proxy_with_fake_acp(events_path.clone()).await;
+
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(format!("http://{addr}/v1/messages"))
+            .header("x-api-key", "secret-123")
+            .json(&json!({
+                "model": model,
+                "max_tokens": 1024,
+                "messages": [{ "role": "user", "content": "hi" }],
+                "stream": true
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let mut stream = resp.bytes_stream();
+        read_until_stream_content(&mut stream, "working").await;
+        drop(stream);
+
+        wait_for_fake_acp_event(&events_path, "cancel-notification").await;
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn anthropic_nonstreaming_client_disconnect_cancels_acp_turn() {
+        let events_path = std::env::temp_dir()
+            .join(format!("ai-proxy-http-acp-cancel-{}.log", uuid::Uuid::new_v4()))
+            .to_string_lossy()
+            .to_string();
+        let (addr, model, server) = start_proxy_with_fake_acp(events_path.clone()).await;
+
+        use tokio::io::AsyncWriteExt;
+        let body = json!({
+            "model": model,
+            "max_tokens": 1024,
+            "messages": [{ "role": "user", "content": "hi" }]
+        })
+        .to_string();
+        let request = format!(
+            "POST /v1/messages HTTP/1.1\r\nhost: {addr}\r\nx-api-key: secret-123\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let mut socket = tokio::net::TcpStream::connect(addr)
+            .await
+            .expect("failed to connect to the test proxy");
+        socket
+            .write_all(request.as_bytes())
+            .await
+            .expect("failed to write the test request");
+
+        wait_for_fake_acp_event(&events_path, "prompt").await;
+        drop(socket);
+
+        wait_for_fake_acp_event(&events_path, "cancel-notification").await;
+        server.abort();
+    }
+
 }
 

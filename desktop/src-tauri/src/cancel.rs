@@ -45,6 +45,31 @@ impl CancelToken {
     }
 }
 
+/// Drop-guard для handler-фьючеры axum: если клиент оборвал non-streaming
+/// запрос и hyper выкинул handler, фоновый backend-turn всё равно получает cancel.
+pub struct CancelOnDrop {
+    token: Arc<CancelToken>,
+    armed: bool,
+}
+
+impl CancelOnDrop {
+    pub fn new(token: Arc<CancelToken>) -> Self {
+        Self { token, armed: true }
+    }
+
+    pub fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        if self.armed {
+            self.token.cancel();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
