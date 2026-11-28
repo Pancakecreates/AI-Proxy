@@ -481,6 +481,24 @@ impl CodexBackend {
         }
     }
 
+    async fn interrupt_active_turn(&self, thread_id: &str) {
+        let turn_id = self
+            .active_turns
+            .lock()
+            .await
+            .get(thread_id)
+            .and_then(|active| active.turn_id.clone());
+        if let Some(tid) = turn_id {
+            let _ = self
+                .rpc_request(
+                    "turn/interrupt",
+                    json!({ "threadId": thread_id, "turnId": tid }),
+                    5_000,
+                )
+                .await;
+        }
+    }
+
     async fn rpc_request(&self, method: &str, params: Value, timeout_ms: u64) -> Result<Value, String> {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = oneshot::channel();
@@ -822,9 +840,21 @@ impl CodexBackend {
         }
 
         self.last_msg_ms.store(now_ms(), Ordering::SeqCst);
-        let start_res = self
-            .rpc_request("turn/start", turn_params, settings.startup_timeout_ms)
-            .await;
+        let start_fut = self.rpc_request("turn/start", turn_params, settings.startup_timeout_ms);
+        tokio::pin!(start_fut);
+        let start_res = if let Some(notify) = &cancel_notify {
+            tokio::select! {
+                res = &mut start_fut => res,
+                _ = notify.cancelled() => {
+                    self.interrupt_active_turn(&thread.thread_id).await;
+                    self.active_turns.lock().await.remove(&thread.thread_id);
+                    self.threads.lock().await.remove(&thread.thread_id);
+                    return Err("Запрос отменён пользователем".to_string());
+                }
+            }
+        } else {
+            start_fut.await
+        };
 
         if let Err(e) = start_res {
             self.active_turns.lock().await.remove(&thread.thread_id);
@@ -877,10 +907,7 @@ impl CodexBackend {
             tokio::select! {
                 res = wait_fut => res,
                 _ = notify.cancelled() => {
-                    let turn_id = self.active_turns.lock().await.get(&thread.thread_id).and_then(|a| a.turn_id.clone());
-                    if let Some(tid) = turn_id {
-                        let _ = self.rpc_request("turn/interrupt", json!({ "threadId": thread.thread_id, "turnId": tid }), 5_000).await;
-                    }
+                    self.interrupt_active_turn(&thread.thread_id).await;
                     Err("Запрос отменён пользователем".to_string())
                 }
             }
@@ -980,6 +1007,14 @@ impl CodexBackend {
 mod tests {
     use super::*;
     use crate::types::NormalizedMessage;
+    use tokio::io::DuplexStream;
+    use tokio::sync::mpsc;
+
+    struct FakeCodexServer {
+        task: tokio::task::JoinHandle<()>,
+        turn_starts: mpsc::UnboundedReceiver<()>,
+        interrupts: mpsc::UnboundedReceiver<Value>,
+    }
 
     fn test_backend() -> Arc<CodexBackend> {
         let settings = Arc::new(RwLock::new(AppSettings::default()));
@@ -987,8 +1022,7 @@ mod tests {
         CodexBackend::new("fake-codex".into(), settings, log)
     }
 
-    #[tokio::test]
-    async fn cancel_token_sends_turn_interrupt_for_active_turn() {
+    async fn prepare_backend() -> (Arc<CodexBackend>, DuplexStream) {
         let backend = test_backend();
         backend.models.write().await.push(RawModelEntry {
             id: "fake-model".into(),
@@ -1007,10 +1041,18 @@ mod tests {
             st.stdin = Some(Box::new(backend_write));
             st.initialized = true;
         }
+        (backend, server_read)
+    }
 
-        let (interrupt_tx, mut interrupt_rx) = tokio::sync::mpsc::unbounded_channel::<Value>();
+    fn spawn_fake_server(
+        backend: Arc<CodexBackend>,
+        server_read: DuplexStream,
+        delay_turn_start_response: bool,
+    ) -> FakeCodexServer {
+        let (turn_start_tx, turn_starts) = mpsc::unbounded_channel::<()>();
+        let (interrupt_tx, interrupts) = mpsc::unbounded_channel::<Value>();
         let server_backend = backend.clone();
-        let server_task = tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             let mut lines = BufReader::new(server_read).lines();
             while let Ok(Some(line)) = lines.next_line().await {
                 let Ok(msg) = serde_json::from_str::<Value>(&line) else {
@@ -1030,6 +1072,7 @@ mod tests {
                         }
                     }
                     "turn/start" => {
+                        let _ = turn_start_tx.send(());
                         let thread_id = msg
                             .get("params")
                             .and_then(|p| p.get("threadId"))
@@ -1045,24 +1088,26 @@ mod tests {
                                 }
                             }))
                             .await;
-                        if let Some(id) = id {
+                        if !delay_turn_start_response {
+                            if let Some(id) = id {
+                                server_backend
+                                    .handle_incoming(json!({
+                                        "id": id,
+                                        "result": { "turn": { "id": "turn-1" } }
+                                    }))
+                                    .await;
+                            }
                             server_backend
                                 .handle_incoming(json!({
-                                    "id": id,
-                                    "result": { "turn": { "id": "turn-1" } }
+                                    "method": "item/agentMessage/delta",
+                                    "params": {
+                                        "threadId": thread_id,
+                                        "itemId": "message-1",
+                                        "delta": "working"
+                                    }
                                 }))
                                 .await;
                         }
-                        server_backend
-                            .handle_incoming(json!({
-                                "method": "item/agentMessage/delta",
-                                "params": {
-                                    "threadId": thread_id,
-                                    "itemId": "message-1",
-                                    "delta": "working"
-                                }
-                            }))
-                            .await;
                     }
                     "turn/interrupt" => {
                         let params = msg.get("params").cloned().unwrap_or_else(|| json!({}));
@@ -1083,12 +1128,19 @@ mod tests {
                 }
             }
         });
+        FakeCodexServer {
+            task,
+            turn_starts,
+            interrupts,
+        }
+    }
 
-        let (sink, mut stream_rx) = tokio::sync::mpsc::unbounded_channel();
-        let cancel = CancelToken::new();
-        let backend_for_turn = backend.clone();
-        let cancel_for_turn = cancel.clone();
-        let turn_task = tokio::spawn(async move {
+    fn spawn_turn(
+        backend: Arc<CodexBackend>,
+        cancel: Arc<CancelToken>,
+        sink: Option<StreamSink>,
+    ) -> tokio::task::JoinHandle<Result<TurnResult, String>> {
+        tokio::spawn(async move {
             let req = UnifiedTurnRequest {
                 model: Some("fake-model".into()),
                 system: String::new(),
@@ -1103,10 +1155,35 @@ mod tests {
                 requested_speed: None,
                 cwd: Some(std::env::temp_dir().to_string_lossy().to_string()),
             };
-            backend_for_turn
-                .run_turn("fake-model", &req, Some(sink), Some(cancel_for_turn))
-                .await
-        });
+            backend.run_turn("fake-model", &req, sink, Some(cancel)).await
+        })
+    }
+
+    async fn expect_interrupt(server: &mut FakeCodexServer) -> Value {
+        tokio::time::timeout(std::time::Duration::from_secs(2), server.interrupts.recv())
+            .await
+            .expect("turn/interrupt was not sent")
+            .expect("interrupt channel closed")
+    }
+
+    async fn expect_cancelled_turn(
+        turn_task: tokio::task::JoinHandle<Result<TurnResult, String>>,
+    ) {
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(2), turn_task)
+            .await
+            .expect("cancelled Codex turn did not finish")
+            .expect("turn task panicked");
+        assert!(outcome.is_err(), "cancelled turn unexpectedly succeeded");
+    }
+
+    #[tokio::test]
+    async fn cancel_token_sends_turn_interrupt_for_active_turn() {
+        let (backend, server_read) = prepare_backend().await;
+        let mut server = spawn_fake_server(backend.clone(), server_read, false);
+
+        let (sink, mut stream_rx) = tokio::sync::mpsc::unbounded_channel();
+        let cancel = CancelToken::new();
+        let turn_task = spawn_turn(backend.clone(), cancel.clone(), Some(sink));
 
         let first_event = tokio::time::timeout(std::time::Duration::from_secs(2), stream_rx.recv())
             .await
@@ -1115,20 +1192,34 @@ mod tests {
         assert!(matches!(first_event, StreamEvent::Text(ref chunk) if chunk == "working"));
 
         cancel.cancel();
-        let interrupt_params = tokio::time::timeout(std::time::Duration::from_secs(2), interrupt_rx.recv())
-            .await
-            .expect("turn/interrupt was not sent")
-            .expect("interrupt channel closed");
+        let interrupt_params = expect_interrupt(&mut server).await;
         assert_eq!(interrupt_params["threadId"], "thread-1");
         assert_eq!(interrupt_params["turnId"], "turn-1");
-
-        let outcome = tokio::time::timeout(std::time::Duration::from_secs(2), turn_task)
-            .await
-            .expect("cancelled Codex turn did not finish")
-            .expect("turn task panicked");
-        assert!(outcome.is_err(), "cancelled turn unexpectedly succeeded");
+        expect_cancelled_turn(turn_task).await;
 
         backend.shutdown().await;
-        server_task.abort();
+        server.task.abort();
+    }
+
+    #[tokio::test]
+    async fn cancel_token_interrupts_turn_while_start_response_is_pending() {
+        let (backend, server_read) = prepare_backend().await;
+        let mut server = spawn_fake_server(backend.clone(), server_read, true);
+
+        let cancel = CancelToken::new();
+        let turn_task = spawn_turn(backend.clone(), cancel.clone(), None);
+        tokio::time::timeout(std::time::Duration::from_secs(2), server.turn_starts.recv())
+            .await
+            .expect("fake Codex did not receive turn/start")
+            .expect("turn/start channel closed");
+
+        cancel.cancel();
+        let interrupt_params = expect_interrupt(&mut server).await;
+        assert_eq!(interrupt_params["threadId"], "thread-1");
+        assert_eq!(interrupt_params["turnId"], "turn-1");
+        expect_cancelled_turn(turn_task).await;
+
+        backend.shutdown().await;
+        server.task.abort();
     }
 }
