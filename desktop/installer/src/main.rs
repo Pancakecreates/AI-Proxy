@@ -197,14 +197,12 @@ fn main() {
         .with_title("Установка AI Proxy")
         .with_inner_size(LogicalSize::new(500.0, 410.0))
         .with_decorations(false)
-        .with_transparent(true)
         .with_resizable(false)
         .build(&event_loop)
         .expect("build setup window");
 
     let proxy_ipc = proxy.clone();
     let webview_res = WebViewBuilder::new()
-        .with_transparent(true)
         .with_html(UI_HTML)
         .with_ipc_handler(move |req| {
             if let Ok(msg) = serde_json::from_str::<IpcMsg>(req.body()) {
