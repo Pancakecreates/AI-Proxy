@@ -1,19 +1,20 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tokio::sync::Notify;
+use tokio::sync::watch;
 
 /// Токен отмены с памятью состояния: в отличие от голого Notify,
 /// отмена не теряется, если она произошла до входа backend в select!.
 pub struct CancelToken {
     cancelled: AtomicBool,
-    notify: Notify,
+    tx: watch::Sender<bool>,
 }
 
 impl CancelToken {
     pub fn new() -> Arc<Self> {
+        let (tx, _) = watch::channel(false);
         Arc::new(Self {
             cancelled: AtomicBool::new(false),
-            notify: Notify::new(),
+            tx,
         })
     }
 
@@ -21,9 +22,7 @@ impl CancelToken {
         if self.cancelled.swap(true, Ordering::SeqCst) {
             return;
         }
-        self.notify.notify_waiters();
-        // Страховочный permit для случая, когда ожидание ещё не было запущено.
-        self.notify.notify_one();
+        let _ = self.tx.send(true);
     }
 
     pub fn is_cancelled(&self) -> bool {
@@ -34,7 +33,15 @@ impl CancelToken {
         if self.is_cancelled() {
             return;
         }
-        self.notify.notified().await;
+        let mut rx = self.tx.subscribe();
+        if self.is_cancelled() || *rx.borrow() {
+            return;
+        }
+        while rx.changed().await.is_ok() {
+            if *rx.borrow() {
+                return;
+            }
+        }
     }
 }
 
@@ -49,5 +56,34 @@ mod tests {
         tokio::time::timeout(std::time::Duration::from_millis(100), token.cancelled())
             .await
             .expect("cancel state must be sticky");
+    }
+
+    #[tokio::test]
+    async fn cancellation_wakes_all_current_waiters() {
+        let token = CancelToken::new();
+        let mut tasks = Vec::new();
+        for _ in 0..8 {
+            let token = token.clone();
+            tasks.push(tokio::spawn(async move { token.cancelled().await }));
+        }
+        tokio::task::yield_now().await;
+        token.cancel();
+        for task in tasks {
+            tokio::time::timeout(std::time::Duration::from_millis(100), task)
+                .await
+                .expect("waiter did not wake")
+                .expect("waiter task panicked");
+        }
+    }
+
+    #[tokio::test]
+    async fn repeated_cancel_is_idempotent() {
+        let token = CancelToken::new();
+        token.cancel();
+        token.cancel();
+        assert!(token.is_cancelled());
+        tokio::time::timeout(std::time::Duration::from_millis(100), token.cancelled())
+            .await
+            .expect("cancel state must remain sticky");
     }
 }

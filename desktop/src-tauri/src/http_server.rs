@@ -1740,9 +1740,13 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn streaming_client_disconnect_cancels_upstream_turn() {
-        let mut upstream = start_hanging_upstream(true).await;
+    async fn start_proxy_with_hanging_upstream() -> (
+        HangingUpstream,
+        std::net::SocketAddr,
+        String,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let upstream = start_hanging_upstream(true).await;
 
         let mut s = AppSettings::default();
         s.api_key = Some("secret-123".into());
@@ -1793,6 +1797,44 @@ mod tests {
             let _ = axum::serve(listener, app).await;
         });
 
+        (upstream, addr, model, server)
+    }
+
+    async fn read_until_upstream_content<S, B, E>(stream: &mut S)
+    where
+        S: futures::Stream<Item = Result<B, E>> + Unpin,
+        B: AsRef<[u8]>,
+        E: std::fmt::Debug,
+    {
+        use futures::StreamExt;
+        let mut saw_content = false;
+        for _ in 0..10 {
+            let chunk = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+                .await
+                .expect("proxy did not emit an SSE chunk")
+                .expect("SSE stream ended before upstream content")
+                .expect("SSE chunk read failed");
+            let text = String::from_utf8_lossy(chunk.as_ref());
+            if text.contains("\"hi\"") || text.contains("\\\"hi\\\"") || text.contains("\"content\":\"hi\"") {
+                saw_content = true;
+                break;
+            }
+        }
+        assert!(saw_content, "proxy did not forward content from the active upstream turn");
+    }
+
+    async fn assert_upstream_disconnects(mut upstream: HangingUpstream) {
+        tokio::time::timeout(std::time::Duration::from_secs(4), upstream.disconnects.recv())
+            .await
+            .expect("upstream connection stayed open after the downstream SSE client disconnected")
+            .expect("upstream disconnect channel closed");
+        upstream.task.abort();
+    }
+
+    #[tokio::test]
+    async fn streaming_client_disconnect_cancels_upstream_turn() {
+        let (upstream, addr, model, server) = start_proxy_with_hanging_upstream().await;
+
         let client = reqwest::Client::new();
         let resp = client
             .post(format!("http://{addr}/v1/chat/completions"))
@@ -1807,23 +1849,39 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), 200);
 
-        use futures::StreamExt;
         let mut stream = resp.bytes_stream();
-        let first = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
-            .await
-            .expect("proxy did not emit the first SSE chunk")
-            .expect("SSE stream ended unexpectedly")
-            .unwrap();
-        assert!(!first.is_empty());
+        read_until_upstream_content(&mut stream).await;
         drop(stream);
 
-        tokio::time::timeout(std::time::Duration::from_secs(4), upstream.disconnects.recv())
-            .await
-            .expect("upstream connection stayed open after the downstream SSE client disconnected")
-            .expect("upstream disconnect channel closed");
-
+        assert_upstream_disconnects(upstream).await;
         server.abort();
-        upstream.task.abort();
+    }
+
+    #[tokio::test]
+    async fn anthropic_streaming_client_disconnect_cancels_upstream_turn() {
+        let (upstream, addr, model, server) = start_proxy_with_hanging_upstream().await;
+
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(format!("http://{addr}/v1/messages"))
+            .header("x-api-key", "secret-123")
+            .json(&json!({
+                "model": model,
+                "max_tokens": 1024,
+                "messages": [{ "role": "user", "content": "hi" }],
+                "stream": true
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let mut stream = resp.bytes_stream();
+        read_until_upstream_content(&mut stream).await;
+        drop(stream);
+
+        assert_upstream_disconnects(upstream).await;
+        server.abort();
     }
 }
 

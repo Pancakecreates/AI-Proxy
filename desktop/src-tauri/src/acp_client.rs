@@ -1449,7 +1449,7 @@ mod cancel_integration_tests {
             args: vec![
                 "--nocapture".into(),
                 "--exact".into(),
-                "acp_client::tests::fake_acp_cancel_child".into(),
+                "acp_client::cancel_integration_tests::fake_acp_cancel_child".into(),
             ],
             env_overrides: env,
             auth_method_ids: Vec::new(),
