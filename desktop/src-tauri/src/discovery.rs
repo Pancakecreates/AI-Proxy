@@ -3,6 +3,18 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+fn simplify_unc_path(path: &std::path::Path) -> String {
+    let s = path.to_string_lossy().to_string();
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = s.strip_prefix(r"\\?\") {
+        rest.to_string()
+    } else {
+        s
+    }
+}
+
+
 pub fn openbot_app_data_dir() -> PathBuf {
     #[cfg(target_os = "windows")]
     {
@@ -166,7 +178,7 @@ pub fn discover_antigravity_accounts() -> Vec<AntigravityAccountConfig> {
         discovered.push(AntigravityAccountConfig {
             id,
             label,
-            gemini_dir: canonical.to_string_lossy().to_string(),
+            gemini_dir: simplify_unc_path(&canonical),
             app_data_dir: default_app_data.to_string(),
             email,
             enabled: true,
@@ -203,15 +215,15 @@ pub fn merge_antigravity_accounts(saved: &[AntigravityAccountConfig]) -> Vec<Ant
     let mut seen_dirs = HashSet::new();
 
     for acc in saved {
-        let norm = fs::canonicalize(&acc.gemini_dir)
-            .unwrap_or_else(|_| PathBuf::from(&acc.gemini_dir))
-            .to_string_lossy()
-            .to_lowercase();
+        let canon = fs::canonicalize(&acc.gemini_dir)
+            .unwrap_or_else(|_| PathBuf::from(&acc.gemini_dir));
+        let norm = simplify_unc_path(&canon).to_lowercase();
         seen_dirs.insert(norm);
         let fresh_email = read_antigravity_account_email(
             &Path::new(&acc.gemini_dir).join(&acc.app_data_dir),
         );
         let mut updated = acc.clone();
+        updated.gemini_dir = simplify_unc_path(Path::new(&updated.gemini_dir));
         if let Some(em) = fresh_email {
             updated.email = Some(em.clone());
             if updated.label.starts_with("Account ") || updated.label.starts_with("New Account") {
@@ -222,7 +234,7 @@ pub fn merge_antigravity_accounts(saved: &[AntigravityAccountConfig]) -> Vec<Ant
     }
 
     for d in disk {
-        let norm = d.gemini_dir.to_lowercase();
+        let norm = simplify_unc_path(std::path::Path::new(&d.gemini_dir)).to_lowercase();
         if !seen_dirs.contains(&norm) {
             seen_dirs.insert(norm);
             result.push(d);
@@ -246,5 +258,27 @@ pub fn detect_all_runtimes(settings: &AppSettings) -> DetectedRuntimes {
         kimi_path: resolve_runtime_executable("kimi", &["kimi"], settings.kimi_path.as_deref()),
         hermes_path: resolve_runtime_executable("hermes", &["hermes"], settings.hermes_path.as_deref()),
         antigravity_accounts: merge_antigravity_accounts(&settings.antigravity_accounts),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::simplify_unc_path;
+    use std::path::Path;
+
+    #[test]
+    fn strips_windows_extended_length_prefix() {
+        assert_eq!(
+            simplify_unc_path(Path::new(r"\\?\C:\Users\Admin\.gemini")),
+            r"C:\Users\Admin\.gemini"
+        );
+        assert_eq!(
+            simplify_unc_path(Path::new(r"\\?\UNC\server\share\x")),
+            r"\\server\share\x"
+        );
+        assert_eq!(
+            simplify_unc_path(Path::new(r"C:\Users\Admin\.gemini")),
+            r"C:\Users\Admin\.gemini"
+        );
     }
 }
