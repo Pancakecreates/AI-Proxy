@@ -99,6 +99,107 @@ pub fn is_model_disabled(settings: &AppSettings, m: &BackendModelEntry) -> bool 
     })
 }
 
+pub const FLEX_MODEL_ID: &str = "flex";
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum FlexTier {
+    Low,
+    Medium,
+    High,
+}
+
+fn flex_tier_from_effort(effort: Option<ThoughtLevel>) -> FlexTier {
+    match effort {
+        Some(ThoughtLevel::None) | Some(ThoughtLevel::Minimal) | Some(ThoughtLevel::Low) => FlexTier::Low,
+        Some(ThoughtLevel::High) | Some(ThoughtLevel::Xhigh) | Some(ThoughtLevel::Max) => FlexTier::High,
+        _ => FlexTier::Medium,
+    }
+}
+
+fn flex_price_score(settings: &AppSettings, native_id: &str) -> f64 {
+    let p = settings
+        .custom_pricing
+        .get(native_id)
+        .cloned()
+        .unwrap_or_else(|| crate::pricing::default_api_pricing(native_id));
+    (p.input_per_1m_usd + p.output_per_1m_usd) / 2.0
+}
+
+fn is_flex_candidate(m: &BackendModelEntry) -> bool {
+    !m.native_id.eq_ignore_ascii_case(FLEX_MODEL_ID)
+        && !m.native_id.eq_ignore_ascii_case("adaptive")
+        && !m.backend_key.eq_ignore_ascii_case(FLEX_MODEL_ID)
+}
+
+/// Returns Some(effort_from_suffix) when `raw` addresses the virtual flex model,
+/// e.g. "flex", "flex-low", "g--flex-high".
+fn parse_flex_request(raw: &str) -> Option<Option<ThoughtLevel>> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let decoded = decode_gateway_model_id(trimmed).unwrap_or_else(|| trimmed.to_string());
+    let no_ctx = decoded
+        .strip_suffix("[1m]")
+        .or_else(|| decoded.strip_suffix("[1M]"))
+        .unwrap_or(decoded.as_str())
+        .trim()
+        .to_string();
+    let (base, eff, _spd) = peel_effort_and_speed_suffixes(&no_ctx);
+    if base.eq_ignore_ascii_case(FLEX_MODEL_ID) {
+        Some(eff)
+    } else {
+        None
+    }
+}
+
+/// Picks an index into the ascending-price-sorted `sorted` list of (original_index, score)
+/// for the tier: the most capable (highest-priced) entry of the tier's price band.
+fn flex_pick_sorted(sorted: &[(usize, f64)], tier: FlexTier) -> Option<usize> {
+    let n = sorted.len();
+    if n == 0 {
+        return None;
+    }
+    let third = n / 3;
+    let (start, end) = match tier {
+        FlexTier::Low => (0, third),
+        FlexTier::Medium => (third, 2 * third),
+        FlexTier::High => (2 * third, n),
+    };
+    if end > start {
+        return Some(sorted[end - 1].0);
+    }
+    let pos = match tier {
+        FlexTier::Low => 0,
+        FlexTier::Medium => n / 2,
+        FlexTier::High => n - 1,
+    };
+    Some(sorted[pos].0)
+}
+
+fn flex_catalog_entry(pool: &[BackendModelEntry]) -> BackendModelEntry {
+    let real: Vec<&BackendModelEntry> = pool.iter().filter(|m| is_flex_candidate(m)).collect();
+    BackendModelEntry {
+        id: FLEX_MODEL_ID.into(),
+        name: "Flex".into(),
+        display_name: "Flex".into(),
+        gateway_id: FLEX_MODEL_ID.into(),
+        supports_images: real.iter().any(|m| m.supports_images),
+        description: "Автовыбор из доступных моделей по уровню усилий: low — самые дешёвые, medium — средние по цене, high — лучшие.".into(),
+        backend_key: FLEX_MODEL_ID.into(),
+        backend_kind: BackendKind::Devin,
+        backend_label: "AI Proxy".into(),
+        native_id: FLEX_MODEL_ID.into(),
+        qualified_id: FLEX_MODEL_ID.into(),
+        brand: "flex".into(),
+        max_input_tokens: real.iter().map(|m| m.max_input_tokens).max().unwrap_or(0),
+        max_tokens: real.iter().map(|m| m.max_tokens).max().unwrap_or(0),
+        supported_efforts: ThoughtLevel::SCALE.to_vec(),
+        supported_speeds: vec![SpeedMode::Standard],
+        is_free: false,
+    }
+}
+
 pub struct RunTurnOutput {
     pub turn: TurnResult,
     pub backend_key: String,
@@ -531,6 +632,9 @@ impl BackendRouter {
             all.extend(b.list_models().await);
         }
         assign_unique_display_names(&mut all);
+        if !all.is_empty() {
+            all.insert(0, flex_catalog_entry(&all));
+        }
         all
     }
 
@@ -549,6 +653,52 @@ impl BackendRouter {
             total += s.active_sessions;
         }
         total
+    }
+
+    pub async fn resolve_flex(
+        &self,
+        effort: Option<ThoughtLevel>,
+        need_images: bool,
+    ) -> Result<(BackendInstance, String, String), String> {
+        if self.list_models().await.is_empty() {
+            self.warm_up(false).await;
+        }
+        // Lock ordering: never hold the backends lock across list_models(), which
+        // acquires it internally — a queued writer would deadlock the re-read.
+        let catalog = self.list_models().await;
+        let s = self.settings.read().await.clone();
+        if s.disabled_models.iter().any(|d| d.eq_ignore_ascii_case(FLEX_MODEL_ID)) {
+            return Err("Модель «Flex» отключена в настройках прокси. Включите её в каталоге моделей или выберите другую.".to_string());
+        }
+        let pool: Vec<BackendModelEntry> = catalog
+            .into_iter()
+            .filter(|m| is_flex_candidate(m) && !is_model_disabled(&s, m))
+            .collect();
+        if pool.is_empty() {
+            return Err("Flex: нет доступных моделей — все модели отключены или бэкенды неактивны.".to_string());
+        }
+        let backends = self.backends.read().await.clone();
+        let vision_count = pool.iter().filter(|m| m.supports_images).count();
+        let effective: Vec<&BackendModelEntry> = if need_images && vision_count > 0 {
+            pool.iter().filter(|m| m.supports_images).collect()
+        } else {
+            pool.iter().collect()
+        };
+        let mut scored: Vec<(usize, f64)> = effective
+            .iter()
+            .enumerate()
+            .map(|(i, m)| (i, flex_price_score(&s, &m.native_id)))
+            .collect();
+        scored.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        let idx = flex_pick_sorted(&scored, flex_tier_from_effort(effort))
+            .ok_or_else(|| "Flex: не удалось выбрать модель".to_string())?;
+        let chosen = effective[idx];
+        let backend = backends
+            .iter()
+            .find(|b| b.key() == chosen.backend_key)
+            .cloned()
+            .ok_or_else(|| format!("Flex: бэкенд «{}» недоступен", chosen.backend_key))?;
+        Ok((backend, chosen.native_id.clone(), chosen.qualified_id.clone()))
     }
 
     pub async fn resolve_target(
@@ -574,6 +724,11 @@ impl BackendRouter {
                 ));
             }
         }
+        if parse_flex_request(raw).is_some() {
+            let (b, nid, qid) = self.resolve_flex(None, false).await?;
+            return Ok((b, nid, None, None, qid));
+        }
+
         let stripped_1m = raw.strip_suffix("[1m]").or_else(|| raw.strip_suffix("[1M]")).unwrap_or(raw).trim();
         let all_models: Vec<_> = all_models_full
             .iter()
@@ -659,7 +814,17 @@ impl BackendRouter {
         cancel: Option<Arc<Notify>>,
     ) -> Result<RunTurnOutput, RunTurnError> {
         let (backend, native_id, hint_effort, hint_speed, resolved_qid) =
-            self.resolve_target(req.model.as_deref()).await?;
+            if let Some(peeled) = req.model.as_deref().and_then(parse_flex_request) {
+                let eff = req
+                    .requested_effort
+                    .or(peeled)
+                    .or(self.settings.read().await.thought_level);
+                let need_images = req.messages.iter().any(|m| !m.images.is_empty());
+                let (b, nid, qid) = self.resolve_flex(eff, need_images).await?;
+                (b, nid, peeled, None, qid)
+            } else {
+                self.resolve_target(req.model.as_deref()).await?
+            };
         if req.requested_effort.is_none() {
             req.requested_effort = hint_effort;
         }
@@ -729,6 +894,42 @@ mod tests {
         );
         router.backends.write().await.push(BackendInstance::Acp(backend));
         router
+    }
+
+    #[test]
+    fn flex_bands_pick_best_value_within_band() {
+        let sorted: Vec<(usize, f64)> = (0..9).map(|i| (i, i as f64)).collect();
+        assert_eq!(flex_pick_sorted(&sorted, FlexTier::Low), Some(2));
+        assert_eq!(flex_pick_sorted(&sorted, FlexTier::Medium), Some(5));
+        assert_eq!(flex_pick_sorted(&sorted, FlexTier::High), Some(8));
+    }
+
+    #[test]
+    fn flex_bands_degenerate_small_pools() {
+        let one = vec![(0usize, 1.0f64)];
+        assert_eq!(flex_pick_sorted(&one, FlexTier::Low), Some(0));
+        assert_eq!(flex_pick_sorted(&one, FlexTier::Medium), Some(0));
+        assert_eq!(flex_pick_sorted(&one, FlexTier::High), Some(0));
+        let empty: Vec<(usize, f64)> = vec![];
+        assert_eq!(flex_pick_sorted(&empty, FlexTier::Low), None);
+    }
+
+    #[test]
+    fn flex_request_parsing() {
+        assert_eq!(parse_flex_request("flex"), Some(None));
+        assert!(matches!(parse_flex_request("flex-low"), Some(Some(ThoughtLevel::Low))));
+        assert!(matches!(parse_flex_request("Flex-HIGH"), Some(Some(ThoughtLevel::High))));
+        assert_eq!(parse_flex_request("claude-sonnet"), None);
+        assert_eq!(parse_flex_request(""), None);
+    }
+
+    #[test]
+    fn flex_tier_mapping() {
+        assert_eq!(flex_tier_from_effort(Some(ThoughtLevel::Low)), FlexTier::Low);
+        assert_eq!(flex_tier_from_effort(Some(ThoughtLevel::Minimal)), FlexTier::Low);
+        assert_eq!(flex_tier_from_effort(Some(ThoughtLevel::Medium)), FlexTier::Medium);
+        assert_eq!(flex_tier_from_effort(None), FlexTier::Medium);
+        assert_eq!(flex_tier_from_effort(Some(ThoughtLevel::Max)), FlexTier::High);
     }
 
     #[tokio::test]
