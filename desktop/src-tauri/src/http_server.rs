@@ -135,7 +135,7 @@ fn record_turn_error(
             effort: err.effort.clone(),
             backend_key: err.backend_key.clone(),
             account_label: err.backend_label.clone(),
-            status: 502,
+            status: if err.cancelled { 499 } else { 502 },
             latency_ms,
             input_tokens: estimate_tokens_from_chars(est_in_chars),
             output_tokens: 0,
@@ -1770,6 +1770,7 @@ mod tests {
         std::net::SocketAddr,
         String,
         tokio::task::JoinHandle<()>,
+        Arc<AppDb>,
     ) {
         let upstream = start_hanging_upstream(true).await;
 
@@ -1813,7 +1814,7 @@ mod tests {
         let state = HttpSharedState {
             router,
             settings,
-            db,
+            db: db.clone(),
             on_request_log: None,
             force_openai: false,
         };
@@ -1824,7 +1825,7 @@ mod tests {
             let _ = axum::serve(listener, app).await;
         });
 
-        (upstream, addr, model, server)
+        (upstream, addr, model, server, db)
     }
 
     async fn read_until_stream_content<S, B, E>(stream: &mut S, needle: &str)
@@ -1868,8 +1869,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cancelled_streaming_request_is_logged_as_499_not_502() {
+        let (upstream, addr, model, server, db) = start_proxy_with_hanging_upstream().await;
+
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(format!("http://{addr}/v1/chat/completions"))
+            .header("Authorization", "Bearer secret-123")
+            .json(&json!({
+                "model": model,
+                "messages": [{ "role": "user", "content": "hi" }],
+                "stream": true
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let mut stream = resp.bytes_stream();
+        read_until_upstream_content(&mut stream).await;
+        drop(stream);
+
+        assert_upstream_disconnects(upstream).await;
+
+        let mut entry = None;
+        for _ in 0..30 {
+            let logs = db.query_request_logs(10, None).expect("log query failed");
+            if let Some(found) = logs.into_iter().next() {
+                entry = Some(found);
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        let entry = entry.expect("cancelled request was never written to the log");
+        assert_eq!(
+            entry.status, 499,
+            "user-cancelled request must be logged as 499, got {} ({:?})",
+            entry.status, entry.error
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
     async fn streaming_client_disconnect_cancels_upstream_turn() {
-        let (upstream, addr, model, server) = start_proxy_with_hanging_upstream().await;
+        let (upstream, addr, model, server, _db) = start_proxy_with_hanging_upstream().await;
 
         let client = reqwest::Client::new();
         let resp = client
@@ -1895,7 +1938,7 @@ mod tests {
 
     #[tokio::test]
     async fn anthropic_streaming_client_disconnect_cancels_upstream_turn() {
-        let (upstream, addr, model, server) = start_proxy_with_hanging_upstream().await;
+        let (upstream, addr, model, server, _db) = start_proxy_with_hanging_upstream().await;
 
         let client = reqwest::Client::new();
         let resp = client
@@ -1922,7 +1965,7 @@ mod tests {
 
     #[tokio::test]
     async fn responses_streaming_client_disconnect_cancels_upstream_turn() {
-        let (upstream, addr, model, server) = start_proxy_with_hanging_upstream().await;
+        let (upstream, addr, model, server, _db) = start_proxy_with_hanging_upstream().await;
 
         let client = reqwest::Client::new();
         let resp = client

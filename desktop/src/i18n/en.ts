@@ -15,6 +15,7 @@ export const en: Record<string, string> = {
   "Сохранить": "Save",
   "Проверить подключение": "Test connection",
   "Отмена": "Cancel",
+  "Отменён": "Cancelled",
   "Введите адрес прокси для проверки": "Enter a proxy address to test",
   "Прокси-сервер": "Proxy server",
   "(пусто — напрямую)": "(empty — direct)",

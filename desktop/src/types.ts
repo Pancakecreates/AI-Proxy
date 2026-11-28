@@ -275,6 +275,7 @@ export interface UsageSummary {
   totalRequests: number;
   successRequests: number;
   errorRequests: number;
+  cancelledRequests: number;
   totalInputTokens: number;
   totalOutputTokens: number;
   totalCacheReadTokens: number;

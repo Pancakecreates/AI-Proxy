@@ -173,6 +173,7 @@ export const LogsView: React.FC<LogsViewProps> = ({
                       });
                       const isExpanded = expandedId === r.id;
                       const ok = r.status >= 200 && r.status < 400;
+                      const cancelled = r.status === 499;
 
                       return (
                         <React.Fragment key={r.id}>
@@ -226,15 +227,23 @@ export const LogsView: React.FC<LogsViewProps> = ({
                             <td className="whitespace-nowrap">
                               <span
                                 className={`inline-flex items-center gap-1.5 tabular-nums text-[11px] ${
-                                  ok ? "text-[var(--fg-muted)]" : "text-[var(--danger)]"
+                                  cancelled
+                                    ? "text-[var(--fg-subtle)]"
+                                    : ok
+                                      ? "text-[var(--fg-muted)]"
+                                      : "text-[var(--danger)]"
                                 }`}
                               >
                                 <span
                                   className={`size-1.5 rounded-full ${
-                                    ok ? "bg-[var(--success)]" : "bg-[var(--danger)]"
+                                    cancelled
+                                      ? "bg-[var(--fg-subtle)]"
+                                      : ok
+                                        ? "bg-[var(--success)]"
+                                        : "bg-[var(--danger)]"
                                   }`}
                                 />
-                                {r.status}
+                                {cancelled ? t("Отменён") : r.status}
                               </span>
                             </td>
                             <td
@@ -311,7 +320,13 @@ export const LogsView: React.FC<LogsViewProps> = ({
                                   </div>
 
                                   {r.error && (
-                                    <div className="rounded-[5px] border border-[var(--danger)]/30 bg-[var(--danger-soft)] p-2.5 text-[var(--danger)]">
+                                    <div
+                                      className={`rounded-[5px] border p-2.5 ${
+                                        cancelled
+                                          ? "border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--fg-muted)]"
+                                          : "border-[var(--danger)]/30 bg-[var(--danger-soft)] text-[var(--danger)]"
+                                      }`}
+                                    >
                                       {r.error}
                                     </div>
                                   )}

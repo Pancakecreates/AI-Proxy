@@ -267,6 +267,7 @@ pub struct RunTurnError {
     pub backend_label: Option<String>,
     pub resolved_model: Option<String>,
     pub effort: Option<String>,
+    pub cancelled: bool,
 }
 
 impl From<String> for RunTurnError {
@@ -277,6 +278,7 @@ impl From<String> for RunTurnError {
             backend_label: None,
             resolved_model: None,
             effort: None,
+            cancelled: false,
         }
     }
 }
@@ -873,6 +875,7 @@ impl BackendRouter {
         let kind = backend.kind();
         let bkey = backend.key().to_string();
         let blabel = backend.label().to_string();
+        let cancel_state = cancel.clone();
         match backend.run_turn(&native_id, &req, sink, cancel).await {
             Ok(turn) => Ok(RunTurnOutput {
                 turn,
@@ -882,13 +885,20 @@ impl BackendRouter {
                 resolved_qid,
                 effective_effort,
             }),
-            Err(message) => Err(RunTurnError {
-                message,
-                backend_key: Some(bkey),
-                backend_label: Some(blabel),
-                resolved_model: Some(native_id),
-                effort: effective_effort,
-            }),
+            Err(message) => {
+                let cancelled = cancel_state
+                    .as_ref()
+                    .map(|c| c.is_cancelled())
+                    .unwrap_or(false);
+                Err(RunTurnError {
+                    message,
+                    backend_key: Some(bkey),
+                    backend_label: Some(blabel),
+                    resolved_model: Some(native_id),
+                    effort: effective_effort,
+                    cancelled,
+                })
+            }
         }
     }
 

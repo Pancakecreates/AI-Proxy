@@ -615,6 +615,8 @@ pub struct UsageSummary {
     pub total_requests: u64,
     pub success_requests: u64,
     pub error_requests: u64,
+    #[serde(default)]
+    pub cancelled_requests: u64,
     pub total_input_tokens: u64,
     pub total_output_tokens: u64,
     pub total_cache_read_tokens: u64,

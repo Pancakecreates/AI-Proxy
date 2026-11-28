@@ -388,6 +388,7 @@ impl AppDb {
             total_requests: 0,
             success_requests: 0,
             error_requests: 0,
+            cancelled_requests: 0,
             total_input_tokens: 0,
             total_output_tokens: 0,
             total_cache_read_tokens: 0,
@@ -432,6 +433,8 @@ impl AppDb {
             summary.total_requests += 1;
             if (200..400).contains(&status) {
                 summary.success_requests += 1;
+            } else if status == 499 {
+                summary.cancelled_requests += 1;
             } else {
                 summary.error_requests += 1;
             }
