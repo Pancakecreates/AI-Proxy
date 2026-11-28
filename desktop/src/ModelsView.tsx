@@ -1,19 +1,38 @@
 import React, { useMemo, useState } from "react";
 import { Check, Copy, MessageSquare } from "lucide-react";
-import type { BackendModelEntry } from "./types";
+import type { AppSettings, BackendModelEntry } from "./types";
 import { BrandIcon } from "./BrandIcon";
 import { Select } from "./Select";
-import { Button, PageHeader, Panel, SearchInput } from "./components/ui";
+import { Button, PageHeader, Panel, SearchInput, Switch } from "./components/ui";
 import { formatTokens } from "./format";
 import { useI18n } from "./i18n";
 
 interface ModelsViewProps {
   models: BackendModelEntry[];
+  settings: AppSettings;
+  onSaveSettings: (next: AppSettings, restart?: boolean) => Promise<void>;
   onTestModel: (qualifiedId: string) => void;
 }
 
-export const ModelsView: React.FC<ModelsViewProps> = ({ models, onTestModel }) => {
+export const ModelsView: React.FC<ModelsViewProps> = ({ models, settings, onSaveSettings, onTestModel }) => {
   const { t } = useI18n();
+  const disabledList = settings.disabledModels ?? [];
+  const isDisabled = (m: BackendModelEntry) =>
+    disabledList.some(
+      (d) =>
+        d.toLowerCase() === m.qualifiedId.toLowerCase() ||
+        d.toLowerCase() === m.gatewayId.toLowerCase(),
+    );
+  const toggleModel = (m: BackendModelEntry, enabled: boolean) => {
+    const next = enabled
+      ? disabledList.filter(
+          (d) =>
+            d.toLowerCase() !== m.qualifiedId.toLowerCase() &&
+            d.toLowerCase() !== m.gatewayId.toLowerCase(),
+        )
+      : [...disabledList.filter((d) => d.toLowerCase() !== m.qualifiedId.toLowerCase()), m.qualifiedId];
+    void onSaveSettings({ ...settings, disabledModels: next }, true);
+  };
   const [search, setSearch] = useState("");
   const [backendFilter, setBackendFilter] = useState("all");
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -95,7 +114,7 @@ export const ModelsView: React.FC<ModelsViewProps> = ({ models, onTestModel }) =
                   </tr>
                 ) : (
                   filtered.map((m) => (
-                    <tr key={m.qualifiedId}>
+                    <tr key={m.qualifiedId} className={isDisabled(m) ? "opacity-45" : undefined}>
                       <td>
                         <div className="flex items-center gap-2.5">
                           <BrandIcon brand={m.brand} size={18} />
@@ -151,6 +170,12 @@ export const ModelsView: React.FC<ModelsViewProps> = ({ models, onTestModel }) =
                             )}
                             <span>Claude ID</span>
                           </Button>
+                          <span title={t("Отключённые модели скрыты из API прокси")}>
+                            <Switch
+                              checked={!isDisabled(m)}
+                              onCheckedChange={(v) => toggleModel(m, v)}
+                            />
+                          </span>
                           <Button variant="secondary" size="xs" onClick={() => onTestModel(m.qualifiedId)}>
                             <MessageSquare className="size-3" />
                             <span>{t("Тест")}</span>

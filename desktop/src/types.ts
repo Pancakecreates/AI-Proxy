@@ -110,6 +110,7 @@ export interface AppSettings {
   customAcpAgents: CustomAcpAgentConfig[];
   externalProviders: ExternalProviderConfig[];
   proxyUrl: string | null;
+  disabledModels: string[];
 
   modelMap: Record<string, string>;
   customPricing: Record<string, ModelPricing>;

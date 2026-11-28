@@ -326,7 +326,14 @@ const content = () => {
         />
       );
     case "models":
-      return <ModelsView models={models} onTestModel={() => {}} />;
+      return (
+        <ModelsView
+          models={models}
+          settings={settings}
+          onSaveSettings={async () => {}}
+          onTestModel={() => {}}
+        />
+      );
     case "usage":
       return <UsageView usage={usage} backends={status.backends} onReload={() => {}} />;
     case "logs":

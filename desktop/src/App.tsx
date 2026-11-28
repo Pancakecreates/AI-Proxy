@@ -331,6 +331,8 @@ function AppInner({ onLanguageChange }: { onLanguageChange: (lang: string) => vo
           {tab === "models" && (
             <ModelsView
               models={models}
+              settings={settings}
+              onSaveSettings={handleSaveSettings}
               onTestModel={(qid) => {
                 setChatPreselectModel(qid);
                 setTab("chat");
