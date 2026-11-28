@@ -1,4 +1,5 @@
 use crate::acp_client::{hash_system, message_fingerprint, LogFn, StreamEvent, StreamSink};
+use crate::activity::ToolActivityTracker;
 use crate::cancel::CancelToken;
 use crate::models::{
     infer_max_input_tokens, normalize_effort_value, resolve_speed, resolve_thought_level,
@@ -39,7 +40,7 @@ struct TurnState {
     assistant_text: String,
     thinking_text: String,
     commentary_items: HashSet<String>,
-    seen_tools: HashMap<String, String>,
+    tool_activity: ToolActivityTracker,
     input_tokens: u64,
     output_tokens: u64,
     cache_read_tokens: u64,
@@ -85,38 +86,6 @@ fn map_codex_sandbox(mode: DevinMode) -> (&'static str, &'static str) {
         DevinMode::Plan => ("read-only", "never"),
         DevinMode::AcceptEdits | DevinMode::Smart => ("workspace-write", "never"),
         DevinMode::Bypass => ("danger-full-access", "never"),
-    }
-}
-
-fn describe_codex_tool(item: &Value) -> String {
-    let kind = item.get("type").and_then(|v| v.as_str()).unwrap_or("tool");
-    match kind {
-        "commandExecution" => item
-            .get("command")
-            .and_then(|v| v.as_str())
-            .map(|c| format!("Run {}", c.chars().take(80).collect::<String>()))
-            .unwrap_or_else(|| "Run command".to_string()),
-        "fileChange" => "Edit files".to_string(),
-        "mcpToolCall" => {
-            let server = item.get("server").and_then(|v| v.as_str()).unwrap_or("");
-            let tool = item.get("tool").and_then(|v| v.as_str()).unwrap_or("mcp");
-            if server.is_empty() {
-                tool.to_string()
-            } else {
-                format!("{server}.{tool}")
-            }
-        }
-        "webSearch" => item
-            .get("query")
-            .and_then(|v| v.as_str())
-            .map(|q| format!("Web search: {}", q.chars().take(60).collect::<String>()))
-            .unwrap_or_else(|| "Web search".to_string()),
-        "dynamicToolCall" => item
-            .get("tool")
-            .and_then(|v| v.as_str())
-            .unwrap_or("Tool call")
-            .to_string(),
-        other => other.to_string(),
     }
 }
 
@@ -350,6 +319,7 @@ impl CodexBackend {
             return;
         };
         let show_tools = self.settings.read().await.show_tools;
+        let backend_label = self.label.clone();
         let mut turns = self.active_turns.lock().await;
         let Some(active) = turns.get_mut(thread_id) else {
             return;
@@ -391,6 +361,34 @@ impl CodexBackend {
                     }
                 }
             }
+            "item/commandExecution/outputDelta" | "item/fileChange/outputDelta" => {
+                if show_tools != crate::types::ShowToolsMode::None {
+                    let item_id = params.get("itemId").and_then(|v| v.as_str()).unwrap_or("");
+                    if let Some(delta) = params.get("delta").and_then(|v| v.as_str()) {
+                        active.tool_activity.note_codex_output(item_id, delta);
+                    }
+                }
+            }
+            "item/mcpToolCall/progress" => {
+                if show_tools != crate::types::ShowToolsMode::None {
+                    let item_id = params.get("itemId").and_then(|v| v.as_str()).unwrap_or("");
+                    if let Some(message) = params.get("message").and_then(|v| v.as_str()) {
+                        if let Some(line) = active.tool_activity.codex_progress_line(&backend_label, item_id, message) {
+                            if show_tools == crate::types::ShowToolsMode::Text {
+                                active.assistant_text.push_str(&line);
+                                if let Some(s) = &active.sink {
+                                    let _ = s.send(StreamEvent::Text(line));
+                                }
+                            } else {
+                                active.thinking_text.push_str(&line);
+                                if let Some(s) = &active.sink {
+                                    let _ = s.send(StreamEvent::Thinking(line));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             "item/started" | "item/completed" => {
                 if let Some(item) = params.get("item") {
                     let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
@@ -412,18 +410,7 @@ impl CodexBackend {
                             "commandExecution" | "fileChange" | "mcpToolCall" | "webSearch" | "dynamicToolCall"
                         )
                     {
-                        let title = describe_codex_tool(item);
-                        let status = item
-                            .get("status")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or(if method == "item/completed" { "completed" } else { "in_progress" });
-                        if active.seen_tools.get(item_id).map(|s| s.as_str()) != Some(status) {
-                            active.seen_tools.insert(item_id.to_string(), status.to_string());
-                            let line = if method == "item/started" {
-                                format!("\n[Codex tool] {title}...\n")
-                            } else {
-                                format!("\n[Codex tool {status}] {title}\n")
-                            };
+                        if let Some(line) = active.tool_activity.codex_tool_line(&backend_label, item, method == "item/started") {
                             if show_tools == crate::types::ShowToolsMode::Text {
                                 active.assistant_text.push_str(&line);
                                 if let Some(s) = &active.sink {
@@ -847,7 +834,7 @@ impl CodexBackend {
                 assistant_text: String::new(),
                 thinking_text: String::new(),
                 commentary_items: HashSet::new(),
-                seen_tools: HashMap::new(),
+                tool_activity: ToolActivityTracker::new(),
                 input_tokens: 0,
                 output_tokens: 0,
                 cache_read_tokens: 0,

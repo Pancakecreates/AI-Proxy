@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { PlanActivityTracker, ToolActivityTracker } from "./activity.js";
 import { type AcpClient, AcpRpcError } from "./acp-client.js";
 import { parseConfigCatalog, resolveDevinModelWithHints, resolveSpeed, resolveThoughtLevel } from "./models.js";
 import type {
@@ -49,10 +50,10 @@ interface SessionRecord {
   lastUsedAt: number;
 }
 
-interface SeenToolState {
-  title: string;
-  status: string;
-  announcedStart?: boolean;
+function acpTextContent(content: unknown): string | null {
+  if (!content || typeof content !== "object" || Array.isArray(content)) return null;
+  const block = content as { type?: unknown; text?: unknown };
+  return block.type === "text" && typeof block.text === "string" ? block.text : null;
 }
 
 export interface SessionManagerOptions {
@@ -220,7 +221,6 @@ export class SessionManager {
   #catalog: ConfigCatalog = parseConfigCatalog([]);
   readonly #sessions = new Map<string, SessionRecord>();
   #warmupPromise: Promise<ConfigCatalog> | null = null;
-  readonly #toolStates = new Map<string, Map<string, SeenToolState>>();
 
   constructor(acp: AcpClient, config: ProxyConfig, options: SessionManagerOptions = {}) {
     this.#acp = acp;
@@ -469,7 +469,6 @@ export class SessionManager {
 
       session.busy = true;
       session.lastUsedAt = Date.now();
-      this.#toolStates.delete(session.id);
 
       const deltaMessages = isFreshSession ? messages : messages.slice(session.fingerprints.length);
       const promptBlocks = buildPromptBlocks({
@@ -481,6 +480,8 @@ export class SessionManager {
 
       let assistantText = "";
       let deliveredAnyChunk = false;
+      const toolActivity = new ToolActivityTracker();
+      const planActivity = new PlanActivityTracker();
 
       const onUpdate = ({ sessionId, update }: { sessionId: string; update: AcpSessionUpdate }) => {
         if (!session || sessionId !== session.id) return;
@@ -496,19 +497,29 @@ export class SessionManager {
           onUsage?.({ inputTokens, outputTokens });
           return;
         }
-        if (kind === "agent_thought_chunk" && update.content?.type === "text" && update.content.text) {
+        const contentText = acpTextContent(update.content);
+        if (kind === "agent_thought_chunk" && contentText) {
           deliveredAnyChunk = true;
-          onThinking?.(update.content.text);
+          onThinking?.(contentText);
           return;
         }
-        if (kind === "agent_message_chunk" && update.content?.type === "text" && update.content.text) {
+        if (kind === "agent_message_chunk" && contentText) {
           deliveredAnyChunk = true;
-          assistantText += update.content.text;
-          onText?.(update.content.text);
+          assistantText += contentText;
+          onText?.(contentText);
           return;
         }
-        if ((kind === "tool_call" || kind === "tool_call_update") && this.#config.showTools !== "none") {
-          const line = this.#formatToolUpdate(session.id, update);
+        if (kind === "tool_call_content_chunk" && this.#config.showTools !== "none") {
+          toolActivity.noteAcpContentChunk(update);
+          return;
+        }
+        if ((kind === "tool_call" || kind === "tool_call_update" || kind === "plan_update" || kind === "plan" || kind === "plan_removed") && this.#config.showTools !== "none") {
+          const hiddenHook = update._meta?.["cognition.ai/eventType"] === "hook_execution" && update.status !== "failed";
+          const line = hiddenHook
+            ? null
+            : kind === "plan_update" || kind === "plan" || kind === "plan_removed"
+              ? planActivity.acpPlanLine(this.#backendLabel, update)
+              : toolActivity.acpToolLine(this.#backendLabel, update);
           if (line) {
             deliveredAnyChunk = true;
             if (this.#config.showTools === "text") {
@@ -566,7 +577,6 @@ export class SessionManager {
         signal?.removeEventListener("abort", onAbort);
         this.#acp.off("sessionUpdate", onUpdate);
         if (session) {
-          this.#toolStates.delete(session.id);
           session.busy = false;
           session.lastUsedAt = Date.now();
         }
@@ -574,35 +584,6 @@ export class SessionManager {
     }
 
     throw new Error(`Failed to establish ${this.#backendLabel} ACP session.`);
-  }
-
-  #formatToolUpdate(sessionId: string, update: AcpSessionUpdate): string {
-    if (update._meta?.["cognition.ai/eventType"] === "hook_execution" && update.status !== "failed") {
-      return "";
-    }
-    let seen = this.#toolStates.get(sessionId);
-    if (!seen) {
-      seen = new Map();
-      this.#toolStates.set(sessionId, seen);
-    }
-
-    const id = update.toolCallId || update.title || update.name || "tool";
-    const prev = seen.get(id);
-    const title = update.title || update.name || prev?.title || "tool";
-    const status = update.status || prev?.status || "running";
-
-    if (prev && prev.title === title && prev.status === status) return "";
-    seen.set(id, { title, status, announcedStart: prev?.announcedStart });
-
-    if (status === "pending" || status === "in_progress") {
-      if (prev?.announcedStart) return "";
-      seen.set(id, { title, status, announcedStart: true });
-      return `\n[${this.#backendLabel} tool] ${title}...\n`;
-    }
-    if (status === "completed" || status === "failed") {
-      return `\n[${this.#backendLabel} tool ${status}] ${title}\n`;
-    }
-    return "";
   }
 
   async closeAll(): Promise<void> {

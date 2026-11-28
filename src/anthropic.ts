@@ -112,15 +112,13 @@ export async function handleMessagesRequest(
       });
 
       const content: Array<
-        { type: "thinking"; thinking: string; signature: string } | { type: "text"; text: string }
+        { type: "thinking"; thinking: string } | { type: "text"; text: string }
       > = [];
       if (thinkingEnabled && thinking) {
-        content.push({ type: "thinking", thinking, signature: "devin-acp" });
+        content.push({ type: "thinking", thinking });
       }
       if (text) {
         content.push({ type: "text", text });
-      } else if (content.length === 0) {
-        content.push({ type: "text", text: "Done." });
       }
 
       const inputTokens = result.usage.inputTokens || latestUsage.inputTokens || estimateInputTokens(body);
@@ -186,18 +184,10 @@ export async function handleMessagesRequest(
   let nextBlockIndex = 0;
   let activeBlockType: "thinking" | "text" | null = null;
   let activeBlockIndex = -1;
-  let emittedText = false;
   let latestUsage: TurnUsage = { inputTokens: 0, outputTokens: 0 };
 
   const closeActiveBlock = () => {
     if (activeBlockType === null) return;
-    if (activeBlockType === "thinking") {
-      writeSseEvent(res, "content_block_delta", {
-        type: "content_block_delta",
-        index: activeBlockIndex,
-        delta: { type: "signature_delta", signature: "devin-acp" },
-      });
-    }
     writeSseEvent(res, "content_block_stop", {
       type: "content_block_stop",
       index: activeBlockIndex,
@@ -233,7 +223,6 @@ export async function handleMessagesRequest(
       },
       onText: (chunk) => {
         if (!chunk) return;
-        emittedText = true;
         ensureBlock("text");
         writeSseEvent(res, "content_block_delta", {
           type: "content_block_delta",
@@ -246,14 +235,6 @@ export async function handleMessagesRequest(
       },
     });
 
-    if (!emittedText && nextBlockIndex === 0) {
-      ensureBlock("text");
-      writeSseEvent(res, "content_block_delta", {
-        type: "content_block_delta",
-        index: activeBlockIndex,
-        delta: { type: "text_delta", text: "Done." },
-      });
-    }
     closeActiveBlock();
 
     const inputTokens = result.usage.inputTokens || latestUsage.inputTokens || estimateInputTokens(body);

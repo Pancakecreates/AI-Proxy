@@ -1,5 +1,6 @@
 mod acp_client;
 mod accounts;
+mod activity;
 mod cancel;
 mod codex_client;
 mod commands;

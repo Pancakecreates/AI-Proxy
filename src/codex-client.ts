@@ -1,6 +1,7 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { createInterface, type Interface } from "node:readline";
+import { ToolActivityTracker } from "./activity.js";
 import { normalizeEffortValue, resolveSpeed, resolveThoughtLevel } from "./models.js";
 import { extractSystemText, hashSystem, messageFingerprint, normalizeMessageContent } from "./sessions.js";
 import type {
@@ -61,7 +62,7 @@ interface ActiveTurnHandlers {
   turnId: string | null;
   assistantText: string;
   commentaryItemIds: Set<string>;
-  seenTools: Map<string, { title: string; status: string }>;
+  toolActivity: ToolActivityTracker;
   inputTokens: number;
   outputTokens: number;
   onThinking?: (chunk: string) => void;
@@ -140,28 +141,6 @@ function mapCodexSandboxAndApproval(mode: ProxyConfig["mode"]): {
     return { sandbox: "workspace-write", approvalPolicy: "never" };
   }
   return { sandbox: "danger-full-access", approvalPolicy: "never" };
-}
-
-function describeCodexTool(item: Record<string, unknown>): string {
-  const type = asString(item.type) ?? "tool";
-  if (type === "commandExecution") {
-    const cmd = asString(item.command);
-    return cmd ? `Run ${cmd.slice(0, 80)}` : "Run command";
-  }
-  if (type === "fileChange") return "Edit files";
-  if (type === "mcpToolCall") {
-    const server = asString(item.server) ?? "";
-    const tool = asString(item.tool) ?? "mcp";
-    return server ? `${server}.${tool}` : tool;
-  }
-  if (type === "webSearch") {
-    const q = asString(item.query);
-    return q ? `Web search: ${q.slice(0, 60)}` : "Web search";
-  }
-  if (type === "dynamicToolCall") {
-    return asString(item.tool) ?? "Tool call";
-  }
-  return type;
 }
 
 /**
@@ -401,6 +380,32 @@ export class CodexBackend extends EventEmitter implements ProxyBackend {
       return;
     }
 
+    if (method === "item/commandExecution/outputDelta" || method === "item/fileChange/outputDelta") {
+      if (this.#config.showTools !== "none") {
+        const itemId = asString(params.itemId) ?? "";
+        const delta = asString(params.delta);
+        if (delta) active.toolActivity.noteCodexOutput(itemId, delta);
+      }
+      return;
+    }
+
+    if (method === "item/mcpToolCall/progress") {
+      if (this.#config.showTools !== "none") {
+        const itemId = asString(params.itemId) ?? "";
+        const message = asString(params.message);
+        const line = message ? active.toolActivity.codexProgressLine(this.label, itemId, message) : null;
+        if (line) {
+          if (this.#config.showTools === "text") {
+            active.assistantText += line;
+            active.onText?.(line);
+          } else {
+            active.onThinking?.(line);
+          }
+        }
+      }
+      return;
+    }
+
     if (method === "item/started" || method === "item/completed") {
       const item = asRecord(params.item);
       if (!item) return;
@@ -427,15 +432,8 @@ export class CodexBackend extends EventEmitter implements ProxyBackend {
           itemType === "webSearch" ||
           itemType === "dynamicToolCall")
       ) {
-        const title = describeCodexTool(item);
-        const status = asString(item.status) ?? (method === "item/completed" ? "completed" : "in_progress");
-        const prev = active.seenTools.get(itemId);
-        if (!prev || prev.status !== status) {
-          active.seenTools.set(itemId, { title, status });
-          const line =
-            method === "item/started"
-              ? `\n[${this.label} tool] ${title}...\n`
-              : `\n[${this.label} tool ${status}] ${title}\n`;
+        const line = active.toolActivity.codexToolLine(this.label, item, method === "item/started");
+        if (line) {
           if (this.#config.showTools === "text") {
             active.assistantText += line;
             active.onText?.(line);
@@ -743,7 +741,7 @@ export class CodexBackend extends EventEmitter implements ProxyBackend {
           turnId: null,
           assistantText: "",
           commentaryItemIds: new Set(),
-          seenTools: new Map(),
+          toolActivity: new ToolActivityTracker(),
           inputTokens: 0,
           outputTokens: 0,
           onThinking,

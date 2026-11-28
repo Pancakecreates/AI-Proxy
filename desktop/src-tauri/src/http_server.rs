@@ -460,12 +460,10 @@ async fn anthropic_messages_handler(
                 let eff = out.effective_effort;
                 let mut content = Vec::new();
                 if !thinking_disabled && !res.thinking_text.is_empty() {
-                    content.push(json!({ "type": "thinking", "thinking": res.thinking_text, "signature": "devin-acp" }));
+                    content.push(json!({ "type": "thinking", "thinking": res.thinking_text }));
                 }
                 if !res.assistant_text.is_empty() {
                     content.push(json!({ "type": "text", "text": res.assistant_text }));
-                } else if content.is_empty() {
-                    content.push(json!({ "type": "text", "text": "Done." }));
                 }
 
                 let in_tok = if res.usage.input_tokens > 0 {
@@ -578,7 +576,6 @@ async fn anthropic_messages_handler(
             let mut next_idx = 0usize;
             let mut active_type: Option<&'static str> = None;
             let mut active_idx = 0usize;
-            let mut emitted_text = false;
             let mut latest_in = 0u64;
             let mut latest_out = 0u64;
             let mut keepalive = tokio::time::interval(std::time::Duration::from_secs(15));
@@ -588,17 +585,7 @@ async fn anthropic_messages_handler(
             let close_block = |sse_tx: &mpsc::UnboundedSender<Result<Event, Infallible>>,
                                active_type: &mut Option<&'static str>,
                                active_idx: usize| {
-                if let Some(t) = *active_type {
-                    if t == "thinking" {
-                        let _ = sse_tx.send(Ok(Event::default().event("content_block_delta").data(
-                            json!({
-                                "type": "content_block_delta",
-                                "index": active_idx,
-                                "delta": { "type": "signature_delta", "signature": "devin-acp" }
-                            })
-                            .to_string(),
-                        )));
-                    }
+                if active_type.is_some() {
                     let _ = sse_tx.send(Ok(Event::default().event("content_block_stop").data(
                         json!({ "type": "content_block_stop", "index": active_idx }).to_string(),
                     )));
@@ -660,7 +647,6 @@ async fn anthropic_messages_handler(
                                 )));
                             }
                             Some(StreamEvent::Text(chunk)) if !chunk.is_empty() => {
-                                emitted_text = true;
                                 ensure_block("text", &sse_tx, &mut next_idx, &mut active_type, &mut active_idx);
                                 let _ = sse_tx.send(Ok(Event::default().event("content_block_delta").data(
                                     json!({
@@ -700,7 +686,6 @@ async fn anthropic_messages_handler(
                         )));
                     }
                     StreamEvent::Text(chunk) if !chunk.is_empty() => {
-                        emitted_text = true;
                         ensure_block("text", &sse_tx, &mut next_idx, &mut active_type, &mut active_idx);
                         let _ = sse_tx.send(Ok(Event::default().event("content_block_delta").data(
                             json!({
@@ -725,16 +710,6 @@ async fn anthropic_messages_handler(
                     let blabel = out.backend_label;
                     let bkind = out.backend_kind;
                     let eff = out.effective_effort;
-                    if !emitted_text && next_idx == 0 {
-                        ensure_block("text", &sse_tx, &mut next_idx, &mut active_type, &mut active_idx);
-                        let _ = sse_tx.send(Ok(Event::default().event("content_block_delta").data(
-                            json!({
-                                "type": "content_block_delta",
-                                "index": active_idx,
-                                "delta": { "type": "text_delta", "text": "Done." }
-                            }).to_string()
-                        )));
-                    }
                     close_block(&sse_tx, &mut active_type, active_idx);
 
                     let in_tok = if res.usage.input_tokens > 0 {

@@ -180,7 +180,7 @@ export async function handleOpenAIChatRequest(
         },
       });
 
-      const assistantText = text || result.assistantText || "Done.";
+      const assistantText = text || result.assistantText;
       const inTok = result.usage.inputTokens || latestUsage.inputTokens || estimateInputTokens(anthropicReq);
       const outTok =
         result.usage.outputTokens ||
@@ -405,7 +405,7 @@ export async function handleOpenAIResponsesRequest(
         },
       });
 
-      const assistantText = text || result.assistantText || "Done.";
+      const assistantText = text || result.assistantText;
       const inTok = result.usage.inputTokens || latestUsage.inputTokens || estimateInputTokens(anthropicReq);
       const outTok =
         result.usage.outputTokens ||

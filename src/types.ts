@@ -169,11 +169,18 @@ export interface AcpContentBlock {
 
 export interface AcpSessionUpdate {
   sessionUpdate: string;
-  content?: { type?: string; text?: string };
+  content?: unknown;
   toolCallId?: string;
   title?: string;
   name?: string;
+  kind?: string;
   status?: string;
+  rawInput?: unknown;
+  rawOutput?: unknown;
+  locations?: unknown;
+  plan?: unknown;
+  planId?: string;
+  entries?: unknown;
   used?: number;
   size?: number;
   configOptions?: AcpConfigOption[];

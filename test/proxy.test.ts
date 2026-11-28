@@ -137,9 +137,13 @@ rl.on("line", (line) => {
     }
 
     send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: sid, update: { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "Thinking on " + state.model } } } });
-    send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: sid, update: { sessionUpdate: "tool_call", toolCallId: "t1", title: "Read file", status: "in_progress" } } });
-    send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: sid, update: { sessionUpdate: "tool_call_update", toolCallId: "t1", title: "Read file", status: "completed" } } });
-    send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: sid, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: sid + "#" + state.turns + " model=" + state.model + " mode=" + state.mode + " thought=" + state.thought + " speed=" + state.speed + " prompt=" + text } } } });
+    send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: sid, update: { sessionUpdate: "tool_call", toolCallId: "t1", title: "Read file", kind: "read", status: "in_progress", rawInput: { path: "/tmp/readme.txt" } } } });
+    send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: sid, update: { sessionUpdate: "tool_call_content_chunk", toolCallId: "t1", content: { type: "content", content: { type: "text", text: "file chunk" } } } } });
+    send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: sid, update: { sessionUpdate: "tool_call_update", toolCallId: "t1", status: "completed" } } });
+    send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: sid, update: { sessionUpdate: "plan", entries: [{ content: "inspect", status: "completed", priority: "high" }, { content: "implement", status: "in_progress", priority: "high" }] } } });
+    if (!text.includes("NO_TEXT")) {
+      send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: sid, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: sid + "#" + state.turns + " model=" + state.model + " mode=" + state.mode + " thought=" + state.thought + " speed=" + state.speed + " prompt=" + text } } } });
+    }
     send({ jsonrpc: "2.0", id: msg.id, result: { stopReason: "end_turn", usage: { inputTokens: 42, outputTokens: 17 } } });
     return;
   }
@@ -370,6 +374,26 @@ test("end-to-end Anthropic server over fake ACP handles per-model efforts, outpu
     };
     const firstAssistantText = turn1Json.content[1]?.text ?? "";
     assert.match(firstAssistantText, /^sess-2#1 model=claude-opus-5-5-medium mode=bypass thought=xhigh speed=standard/);
+    const firstThinking = turn1Json.content[0]?.thinking ?? "";
+    assert.match(firstThinking, /\[Devin tool\] Read file — \/tmp\/readme\.txt\.\.\./);
+    assert.match(firstThinking, /\[Devin tool completed\] Read file — \/tmp\/readme\.txt/);
+    assert.match(firstThinking, /output: file chunk/);
+    assert.match(firstThinking, /\[Devin plan\] 1\/2 completed — implement/);
+    assert.equal((turn1Json.content[0] as Record<string, unknown>).signature, undefined);
+
+    const silentRes = await fetch(`${baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: { "x-api-key": "secret-key", "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "swe-2-1-medium",
+        thinking: { type: "disabled" },
+        messages: [{ role: "user", content: "NO_TEXT silent turn" }],
+      }),
+    });
+    assert.equal(silentRes.status, 200);
+    const silentJson = (await silentRes.json()) as { content: Array<{ type: string; text?: string }> };
+    assert.equal(silentJson.content.length, 0);
+    assert.equal(silentJson.content.some((block) => block.text === "Done."), false);
 
     // 2. Streaming SSE turn 2 continues session, switches via suffix to swe-2-1-xhigh-lightning -> swe-2-1-medium + thought=xhigh + speed=ultrafast
     const turn2Res = await fetch(`${baseUrl}/v1/messages`, {
@@ -400,6 +424,10 @@ test("end-to-end Anthropic server over fake ACP handles per-model efforts, outpu
       .map((e) => (e.data?.delta as { text: string }).text)
       .join("");
     assert.match(textDeltas, /^sess-2#2 model=swe-2-1-medium mode=bypass thought=xhigh speed=ultrafast/);
+    assert.equal(
+      events.some((e) => (e.data?.delta as { type?: string } | undefined)?.type === "signature_delta"),
+      false,
+    );
 
     // 3. deepseek-v4-pro-max selects deepseek-v4-pro-high + thought=max
     const dsRes = await fetch(`${baseUrl}/v1/messages`, {
@@ -515,6 +543,10 @@ rl.on("line", (line) => {
     send({ jsonrpc: "2.0", id: msg.id, result: { turn: { id: turnId, status: "inProgress", items: [], error: null } } });
     send({ jsonrpc: "2.0", method: "turn/started", params: { threadId: tid, turn: { id: turnId, status: "inProgress" } } });
     send({ jsonrpc: "2.0", method: "item/reasoning/summaryTextDelta", params: { threadId: tid, turnId, itemId: "r1", delta: "Codex thinking..." } });
+    send({ jsonrpc: "2.0", method: "item/started", params: { threadId: tid, turnId, item: { id: "cmd1", type: "commandExecution", command: "npm test", status: "inProgress" } } });
+    send({ jsonrpc: "2.0", method: "item/commandExecution/outputDelta", params: { threadId: tid, turnId, itemId: "cmd1", delta: "tests passed\\n" } });
+    send({ jsonrpc: "2.0", method: "item/completed", params: { threadId: tid, turnId, item: { id: "cmd1", type: "commandExecution", command: "npm test", status: "completed" } } });
+    send({ jsonrpc: "2.0", method: "item/mcpToolCall/progress", params: { threadId: tid, turnId, itemId: "mcp1", message: "loading schema" } });
     const promptText = (msg.params.input || []).map((b) => b.text || "[img]").join(" ");
     send({ jsonrpc: "2.0", method: "item/agentMessage/delta", params: { threadId: tid, turnId, itemId: "m1", delta: tid + ":" + msg.params.model + ":effort=" + (msg.params.effort || "none") + ":" + promptText } });
     send({ jsonrpc: "2.0", method: "thread/tokenUsage/updated", params: { threadId: tid, turnId, tokenUsage: { total: { inputTokens: 15, outputTokens: 9 } } } });
@@ -812,7 +844,12 @@ test("Multi-backend router routes across Antigravity accounts, OpenCode Go/Free,
       body: JSON.stringify({ model: codexModel.id, output_config: { effort: "high" }, messages: [{ role: "user", content: "ping codex" }] }),
     });
     const codexJson = (await codexRes.json()) as { content: Array<{ type: string; text?: string; thinking?: string }> };
-    assert.equal(codexJson.content.find((c) => c.type === "thinking")?.thinking, "Codex thinking...");
+    const codexThinking = codexJson.content.find((c) => c.type === "thinking")?.thinking ?? "";
+    assert.match(codexThinking, /^Codex thinking\.\.\./);
+    assert.match(codexThinking, /\[Codex tool\] Run npm test\.\.\./);
+    assert.match(codexThinking, /\[Codex tool completed\] Run npm test/);
+    assert.match(codexThinking, /output: tests passed/);
+    assert.match(codexThinking, /\[Codex tool progress\] loading schema/);
     assert.match(codexJson.content.find((c) => c.type === "text")?.text ?? "", /^thr-1:gpt-6-luna:effort=high:ping codex$/);
 
     // OpenAI /openai/v1/models

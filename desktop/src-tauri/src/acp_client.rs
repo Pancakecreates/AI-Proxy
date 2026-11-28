@@ -1,3 +1,4 @@
+use crate::activity::{PlanActivityTracker, ToolActivityTracker};
 use crate::cancel::CancelToken;
 use crate::models::{
     filter_opencode_models, infer_max_input_tokens, infer_model_brand, is_free_opencode_model,
@@ -999,7 +1000,8 @@ impl AcpBackend {
             let mut output_tokens = 0u64;
             let mut cache_read_tokens = 0u64;
             let mut measured = false;
-            let mut seen_tools: HashMap<String, (String, String, bool)> = HashMap::new();
+            let mut tool_activity = ToolActivityTracker::new();
+            let mut plan_activity = PlanActivityTracker::new();
 
             while let Some(upd) = upd_rx.recv().await {
                 let kind = upd.get("sessionUpdate").and_then(|v| v.as_str()).unwrap_or("");
@@ -1047,47 +1049,31 @@ impl AcpBackend {
                             let _ = s.send(StreamEvent::Text(txt.to_string()));
                         }
                     }
-                } else if (kind == "tool_call" || kind == "tool_call_update")
+                } else if kind == "tool_call_content_chunk" {
+                    if show_tools != crate::types::ShowToolsMode::None {
+                        tool_activity.note_acp_content_chunk(&upd);
+                    }
+                } else if (kind == "tool_call"
+                        || kind == "tool_call_update"
+                        || kind == "plan_update"
+                        || kind == "plan"
+                        || kind == "plan_removed")
                     && show_tools != crate::types::ShowToolsMode::None
                 {
-                    let tid = upd
-                        .get("toolCallId")
-                        .or_else(|| upd.get("title"))
-                        .or_else(|| upd.get("name"))
+                    let hidden_hook = upd
+                        .get("_meta")
+                        .and_then(|meta| meta.get("cognition.ai/eventType"))
                         .and_then(|v| v.as_str())
-                        .unwrap_or("tool")
-                        .to_string();
-                    let title = upd
-                        .get("title")
-                        .or_else(|| upd.get("name"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("tool")
-                        .to_string();
-                    let status = upd
-                        .get("status")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("running")
-                        .to_string();
-                    let prev = seen_tools.get(&tid).cloned();
-                    if prev.as_ref().map(|(t, s, _)| t == &title && s == &status).unwrap_or(false) {
-                        continue;
-                    }
-                    let announced = prev.as_ref().map(|(_, _, a)| *a).unwrap_or(false);
-                    let line = if status == "pending" || status == "in_progress" {
-                        if announced {
-                            String::new()
-                        } else {
-                            seen_tools.insert(tid, (title.clone(), status.clone(), true));
-                            format!("\n[{backend_label} tool] {title}...\n")
-                        }
-                    } else if status == "completed" || status == "failed" {
-                        seen_tools.insert(tid, (title.clone(), status.clone(), announced));
-                        format!("\n[{backend_label} tool {status}] {title}\n")
+                        == Some("hook_execution")
+                        && upd.get("status").and_then(|v| v.as_str()) != Some("failed");
+                    let line = if hidden_hook {
+                        None
+                    } else if kind == "plan_update" || kind == "plan" || kind == "plan_removed" {
+                        plan_activity.acp_plan_line(&backend_label, &upd)
                     } else {
-                        seen_tools.insert(tid, (title, status, announced));
-                        String::new()
+                        tool_activity.acp_tool_line(&backend_label, &upd)
                     };
-                    if !line.is_empty() {
+                    if let Some(line) = line {
                         if show_tools == crate::types::ShowToolsMode::Text {
                             assistant_text.push_str(&line);
                             if let Some(s) = &sink_clone {
