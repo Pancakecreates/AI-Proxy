@@ -1883,5 +1883,31 @@ mod tests {
         assert_upstream_disconnects(upstream).await;
         server.abort();
     }
+
+    #[tokio::test]
+    async fn responses_streaming_client_disconnect_cancels_upstream_turn() {
+        let (upstream, addr, model, server) = start_proxy_with_hanging_upstream().await;
+
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(format!("http://{addr}/v1/responses"))
+            .header("Authorization", "Bearer secret-123")
+            .json(&json!({
+                "model": model,
+                "input": "hi",
+                "stream": true
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let mut stream = resp.bytes_stream();
+        read_until_upstream_content(&mut stream).await;
+        drop(stream);
+
+        assert_upstream_disconnects(upstream).await;
+        server.abort();
+    }
 }
 
