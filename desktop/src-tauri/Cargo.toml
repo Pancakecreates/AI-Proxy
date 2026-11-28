@@ -1,6 +1,6 @@
 [package]
 name = "ai-proxy-desktop"
-version = "0.2.2"
+version = "0.3.0"
 description = "Cross-platform Anthropic & OpenAI local proxy desktop app backed by local AI CLIs"
 authors = ["Pancakecreates"]
 edition = "2021"
