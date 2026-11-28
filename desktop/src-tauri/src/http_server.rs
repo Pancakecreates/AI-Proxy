@@ -1256,23 +1256,34 @@ async fn openai_responses_handler(
                     },
                 );
 
+                let mut output = Vec::new();
+                if !res.thinking_text.is_empty() {
+                    output.push(json!({
+                        "id": resp_id.replacen("resp_", "rs_", 1),
+                        "type": "reasoning",
+                        "status": "completed",
+                        "summary": [{ "type": "summary_text", "text": res.thinking_text }]
+                    }));
+                }
+                output.push(json!({
+                    "id": msg_id,
+                    "type": "message",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{
+                        "type": "output_text",
+                        "text": res.assistant_text.clone(),
+                        "annotations": []
+                    }]
+                }));
+
                 Json(json!({
                     "id": resp_id,
                     "object": "response",
                     "created_at": created_at,
                     "status": "completed",
                     "model": resolved_qid,
-                    "output": [{
-                        "id": msg_id,
-                        "type": "message",
-                        "status": "completed",
-                        "role": "assistant",
-                        "content": [{
-                            "type": "output_text",
-                            "text": res.assistant_text,
-                            "annotations": []
-                        }]
-                    }],
+                    "output": output,
                     "output_text": res.assistant_text,
                     "usage": {
                         "input_tokens": in_tok,

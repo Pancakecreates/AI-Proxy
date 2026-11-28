@@ -387,7 +387,7 @@ export async function handleOpenAIResponsesRequest(
 
   if (anthropicReq.stream !== true) {
     try {
-      let thinkingLen = 0;
+      let thinking = "";
       let text = "";
       let latestUsage: TurnUsage = { inputTokens: 0, outputTokens: 0 };
 
@@ -395,7 +395,7 @@ export async function handleOpenAIResponsesRequest(
         cwd: context.cwd,
         signal: controller.signal,
         onThinking: (chunk) => {
-          thinkingLen += chunk.length;
+          thinking += chunk;
         },
         onText: (chunk) => {
           text += chunk;
@@ -410,7 +410,24 @@ export async function handleOpenAIResponsesRequest(
       const outTok =
         result.usage.outputTokens ||
         latestUsage.outputTokens ||
-        Math.max(1, Math.ceil((assistantText.length + thinkingLen) / 3.5));
+        Math.max(1, Math.ceil((assistantText.length + thinking.length) / 3.5));
+
+      const output: Array<Record<string, unknown>> = [];
+      if (thinking) {
+        output.push({
+          id: respId.replace(/^resp_/, "rs_"),
+          type: "reasoning",
+          status: "completed",
+          summary: [{ type: "summary_text", text: thinking }],
+        });
+      }
+      output.push({
+        id: msgId,
+        type: "message",
+        status: "completed",
+        role: "assistant",
+        content: [{ type: "output_text", text: assistantText, annotations: [] }],
+      });
 
       const payload = JSON.stringify({
         id: respId,
@@ -418,15 +435,7 @@ export async function handleOpenAIResponsesRequest(
         created_at: createdAt,
         status: "completed",
         model: result.modelId || requestedModel,
-        output: [
-          {
-            id: msgId,
-            type: "message",
-            status: "completed",
-            role: "assistant",
-            content: [{ type: "output_text", text: assistantText, annotations: [] }],
-          },
-        ],
+        output,
         output_text: assistantText,
         usage: {
           input_tokens: inTok,

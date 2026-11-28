@@ -911,10 +911,18 @@ test("Multi-backend router routes across Antigravity accounts, OpenCode Go/Free,
       }),
     });
     assert.equal(respRes.status, 200);
-    const respJson = (await respRes.json()) as { object: string; status: string; output_text: string };
+    const respJson = (await respRes.json()) as {
+      object: string;
+      status: string;
+      output_text: string;
+      output: Array<{ type: string; summary?: Array<{ text?: string }> }>;
+    };
     assert.equal(respJson.object, "response");
     assert.equal(respJson.status, "completed");
     assert.match(respJson.output_text, /^thr-\d+:gpt-6-luna:effort=medium:ping responses$/);
+    const reasoningSummary = respJson.output.find((item) => item.type === "reasoning")?.summary?.[0]?.text ?? "";
+    assert.match(reasoningSummary, /Codex thinking\.\.\./);
+    assert.match(reasoningSummary, /\[Codex tool completed\] Run npm test/);
 
     const respStreamRes = await fetch(`${baseUrl}/v1/responses`, {
       method: "POST",
