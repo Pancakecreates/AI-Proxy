@@ -56,7 +56,7 @@ const settings = {
   openaiPort: 8788,
   enableAnthropic: true,
   enableOpenai: true,
-  apiKey: "aipx_70ddc49a511d455c9639e645c6d387409754276c",
+  apiKey: "aipx_51a6761a8deab4136c937f6d06af54040d87090b",
   cwd: "C:\\Users\\Admin\\projects",
   theme: "dark",
   accent: "copper",
