@@ -93,6 +93,12 @@ impl BackendInstance {
     }
 }
 
+pub fn is_model_disabled(settings: &AppSettings, m: &BackendModelEntry) -> bool {
+    settings.disabled_models.iter().any(|d| {
+        d.eq_ignore_ascii_case(&m.qualified_id) || d.eq_ignore_ascii_case(&m.gateway_id)
+    })
+}
+
 pub struct RunTurnOutput {
     pub turn: TurnResult,
     pub backend_key: String,
@@ -552,12 +558,29 @@ impl BackendRouter {
         if self.list_models().await.is_empty() {
             self.warm_up(false).await;
         }
-        let all_models = self.list_models().await;
+        let all_models_full = self.list_models().await;
         let backends = self.backends.read().await.clone();
         let s = self.settings.read().await.clone();
 
         let raw = requested_model.unwrap_or("").trim();
+        if !raw.is_empty() {
+            if let Some(m) = all_models_full.iter().find(|m| {
+                (m.qualified_id.eq_ignore_ascii_case(raw) || m.gateway_id.eq_ignore_ascii_case(raw))
+                    && is_model_disabled(&s, m)
+            }) {
+                return Err(format!(
+                    "Модель «{}» отключена в настройках прокси. Включите её в каталоге моделей или выберите другую.",
+                    m.display_name
+                ));
+            }
+        }
         let stripped_1m = raw.strip_suffix("[1m]").or_else(|| raw.strip_suffix("[1M]")).unwrap_or(raw).trim();
+        let all_models: Vec<_> = all_models_full
+            .iter()
+            .filter(|m| !is_model_disabled(&s, m))
+            .cloned()
+            .collect();
+
         let mapped = s
             .model_map
             .get(raw)

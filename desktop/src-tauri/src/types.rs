@@ -337,6 +337,9 @@ pub struct AppSettings {
     pub external_providers: Vec<ExternalProviderConfig>,
     #[serde(default)]
     pub proxy_url: Option<String>,
+    /// Квалифицированные или gateway-id моделей, скрытых из API прокси.
+    #[serde(default)]
+    pub disabled_models: Vec<String>,
 
     pub model_map: HashMap<String, String>,
     pub custom_pricing: HashMap<String, ModelPricing>,
@@ -409,6 +412,7 @@ impl Default for AppSettings {
             custom_acp_agents: Vec::new(),
             external_providers: Vec::new(),
             proxy_url: None,
+            disabled_models: Vec::new(),
 
             model_map: HashMap::new(),
             custom_pricing: HashMap::new(),

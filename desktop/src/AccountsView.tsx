@@ -34,6 +34,7 @@ import {
   Switch,
 } from "./components/ui";
 import { plural, useI18n } from "./i18n";
+import { ExternalProvidersPanel } from "./ExternalProvidersPanel";
 
 interface AccountsViewProps {
   settings: AppSettings;
@@ -577,6 +578,8 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
             </div>
           </div>
         </Panel>
+
+        <ExternalProvidersPanel settings={settings} onSaveSettings={onSaveSettings} />
       </div>
     </div>
   );

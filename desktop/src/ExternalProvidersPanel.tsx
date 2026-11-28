@@ -351,8 +351,8 @@ export const ExternalProvidersPanel: React.FC<ExternalProvidersPanelProps> = ({
 };
 
 interface ProxySettingsPanelProps {
-  settings: AppSettings;
-  onSaveSettings: (next: AppSettings, restart?: boolean) => Promise<void>;
+  value: string;
+  onChange: (value: string) => void;
 }
 
 interface ProxyTestResult {
@@ -360,40 +360,22 @@ interface ProxyTestResult {
   externalIp: string | null;
 }
 
-export const ProxySettingsPanel: React.FC<ProxySettingsPanelProps> = ({
-  settings,
-  onSaveSettings,
-}) => {
-  const [value, setValue] = useState(settings.proxyUrl ?? "");
+export const ProxySettingsPanel: React.FC<ProxySettingsPanelProps> = ({ value, onChange }) => {
   const [testing, setTesting] = useState(false);
-  const [saving, setSaving] = useState(false);
   const [result, setResult] = useState<ProxyTestResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const dirty = value.trim() !== (settings.proxyUrl ?? "").trim();
-
-  const save = async () => {
-    setSaving(true);
-    setError(null);
-    try {
-      await onSaveSettings({ ...settings, proxyUrl: value.trim() || null }, true);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setSaving(false);
-    }
-  };
-
   const test = async () => {
+    const url = value.trim();
+    if (!url) {
+      setError("Введите адрес прокси для проверки");
+      setResult(null);
+      return;
+    }
     setTesting(true);
     setResult(null);
     setError(null);
     try {
-      const url = value.trim();
-      if (!url) {
-        setError("Введите адрес прокси для проверки");
-        return;
-      }
       const r = await invoke<ProxyTestResult>("test_proxy_connection", { proxyUrl: url });
       setResult(r);
     } catch (e) {
@@ -404,25 +386,19 @@ export const ProxySettingsPanel: React.FC<ProxySettingsPanelProps> = ({
   };
 
   return (
-    <Panel>
-      <PanelHeader>
-        <div>
-          <PanelTitle>Прокси-сервер</PanelTitle>
-          <PanelDescription>
-            HTTP, HTTPS или SOCKS5-прокси для исходящих запросов к провайдерам. Применяется к
-            CLI-процессам через переменные окружения и к сторонним API напрямую. Локальные адреса
-            всегда идут без прокси.
-          </PanelDescription>
-        </div>
-      </PanelHeader>
-      <div className="mt-3 flex items-end gap-2">
+    <div>
+      <div className="flex items-end gap-2">
         <label className="flex-1 block">
           <span className="mb-1 block text-xs text-[var(--fg-muted)]">
-            Адрес прокси <span className="text-[var(--fg-subtle)]">(пусто — напрямую)</span>
+            Прокси-сервер <span className="text-[var(--fg-subtle)]">(пусто — напрямую)</span>
           </span>
           <Input
             value={value}
-            onChange={(e) => setValue(e.target.value)}
+            onChange={(e) => {
+              onChange(e.target.value);
+              setResult(null);
+              setError(null);
+            }}
             placeholder="http://user:pass@host:8080 или socks5://127.0.0.1:1080"
           />
         </label>
@@ -430,18 +406,12 @@ export const ProxySettingsPanel: React.FC<ProxySettingsPanelProps> = ({
           {testing && <Loader2 size={13} className="animate-spin" />}
           Проверить
         </Button>
-        <Button
-          variant="primary"
-          size="sm"
-          onClick={save}
-          disabled={!dirty || saving}
-          className={cn(!dirty && "opacity-50")}
-        >
-          Сохранить
-        </Button>
       </div>
+      <p className="mt-1.5 text-[11px] text-[var(--fg-subtle)]">
+        HTTP, HTTPS или SOCKS5 для запросов к провайдерам. Локальные адреса всегда идут напрямую.
+      </p>
       {result && (
-        <div className="mt-3 flex items-start gap-2 rounded-md border border-[var(--success)] bg-[var(--success-soft)] px-3 py-2 text-xs text-[var(--success)]">
+        <div className="mt-2 flex items-start gap-2 rounded-md border border-[var(--success)] bg-[var(--success-soft)] px-3 py-2 text-xs text-[var(--success)]">
           <CheckCircle2 size={14} className="mt-px shrink-0" />
           <span>
             Прокси работает: ответ за {result.latencyMs} мс
@@ -450,11 +420,11 @@ export const ProxySettingsPanel: React.FC<ProxySettingsPanelProps> = ({
         </div>
       )}
       {error && (
-        <div className="mt-3 flex items-start gap-2 rounded-md border border-[var(--danger)] bg-[var(--danger-soft)] px-3 py-2 text-xs text-[var(--danger)]">
+        <div className="mt-2 flex items-start gap-2 rounded-md border border-[var(--danger)] bg-[var(--danger-soft)] px-3 py-2 text-xs text-[var(--danger)]">
           <AlertCircle size={14} className="mt-px shrink-0" />
           <span>{error}</span>
         </div>
       )}
-    </Panel>
+    </div>
   );
 };

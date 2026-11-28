@@ -301,7 +301,14 @@ async fn models_handler(
     if refresh || state.router.list_models().await.is_empty() {
         state.router.warm_up(refresh).await;
     }
-    let models = state.router.list_models().await;
+    let settings_snapshot = state.settings.read().await.clone();
+    let models: Vec<_> = state
+        .router
+        .list_models()
+        .await
+        .into_iter()
+        .filter(|m| !crate::router::is_model_disabled(&settings_snapshot, m))
+        .collect();
 
     let path = uri.path();
     let is_openai = state.force_openai

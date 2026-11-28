@@ -27,6 +27,7 @@ import {
   Switch,
 } from "./components/ui";
 import { useI18n } from "./i18n";
+import { ProxySettingsPanel } from "./ExternalProvidersPanel";
 
 interface SettingsViewProps {
   settings: AppSettings;
@@ -495,6 +496,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               />
             </div>
           </div>
+          <ProxySettingsPanel
+            value={draft.proxyUrl ?? ""}
+            onChange={(v) => setDraft({ ...draft, proxyUrl: v.trim() ? v : null })}
+          />
         </Panel>
       </div>
     </div>

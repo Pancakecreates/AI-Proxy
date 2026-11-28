@@ -479,6 +479,7 @@ fn extract_api_error(body: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::{AppSettings, UnifiedTurnRequest};
 
     #[test]
     fn parses_openai_delta_event() {
@@ -526,6 +527,124 @@ mod tests {
         assert_eq!(cr, 3);
         assert_eq!(rt, 2);
         assert!(seen);
+    }
+
+    async fn spawn_mock_openai() -> String {
+        use axum::{routing::{get, post}, Json, Router};
+
+        async fn models() -> Json<Value> {
+            Json(json!({
+                "data": [
+                    { "id": "mock-model-1", "context_length": 128000 },
+                    { "id": "vendor/mock-model-2" }
+                ]
+            }))
+        }
+
+        async fn completions() -> impl axum::response::IntoResponse {
+            let events = [
+                json!({"choices":[{"delta":{"reasoning_content":"раз"}}]}),
+                json!({"choices":[{"delta":{"reasoning_content":"мышь"}}]}),
+                json!({"choices":[{"delta":{"content":"При"}}]}),
+                json!({"choices":[{"delta":{"content":"вет"},"finish_reason":"stop"}]}),
+                json!({"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":4}}),
+            ];
+            let mut body = String::new();
+            for e in events {
+                body.push_str(&format!("data: {}
+
+", e));
+            }
+            body.push_str("data: [DONE]
+
+");
+            (
+                [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                body,
+            )
+        }
+
+        let app = Router::new()
+            .route("/v1/models", get(models))
+            .route("/v1/chat/completions", post(completions));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        format!("http://{addr}")
+    }
+
+    fn test_backend(base_url: &str) -> Arc<ExternalBackend> {
+        let settings = Arc::new(RwLock::new(AppSettings::default()));
+        let log: LogFn = Arc::new(|_, _, _| {});
+        ExternalBackend::new(
+            ExternalProviderConfig {
+                id: "mock".into(),
+                display_name: "Mock".into(),
+                base_url: base_url.into(),
+                api_key: Some("test-key".into()),
+                enabled: true,
+                proxy_mode: crate::types::ProxyMode::Disabled,
+                proxy_url: None,
+                extra_headers: Default::default(),
+                max_output_tokens: None,
+            },
+            settings,
+            log,
+        )
+    }
+
+    #[tokio::test]
+    async fn warm_up_lists_models_from_mock() {
+        let base = spawn_mock_openai().await;
+        let backend = test_backend(&base);
+        let models = backend.warm_up(true).await.expect("warm up");
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].native_id, "mock-model-1");
+        assert_eq!(models[0].max_input_tokens, 128000);
+        assert!(models.iter().any(|m| m.native_id == "vendor/mock-model-2"));
+        assert!(backend.get_status().await.ready);
+    }
+
+    #[tokio::test]
+    async fn run_turn_streams_sse_end_to_end() {
+        let base = spawn_mock_openai().await;
+        let backend = test_backend(&base);
+        backend.warm_up(true).await.expect("warm up");
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let req = UnifiedTurnRequest {
+            model: Some("mock-model-1".into()),
+            system: "sys".into(),
+            messages: vec![NormalizedMessage {
+                role: "user".into(),
+                text: "hi".into(),
+                images: vec![],
+            }],
+            requested_effort: None,
+            thinking_disabled: false,
+            thinking_budget: None,
+            requested_speed: None,
+            cwd: None,
+        };
+        let turn = backend
+            .run_turn("mock-model-1", &req, Some(tx), None)
+            .await
+            .expect("run turn");
+        assert_eq!(turn.assistant_text, "Привет");
+        assert_eq!(turn.thinking_text, "размышь");
+        assert_eq!(turn.stop_reason, "end_turn");
+        assert_eq!(turn.usage.input_tokens, 12);
+        assert_eq!(turn.usage.output_tokens, 4);
+        assert!(turn.usage.measured);
+
+        let mut streamed = String::new();
+        while let Ok(ev) = rx.try_recv() {
+            if let StreamEvent::Text(t) = ev {
+                streamed.push_str(&t);
+            }
+        }
+        assert_eq!(streamed, "Привет");
     }
 
     #[test]
