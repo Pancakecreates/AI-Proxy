@@ -297,4 +297,6 @@ export const en: Record<string, string> = {
   "Как глобально": "Same as global",
   "Свой прокси": "Custom proxy",
   "Прокси для {label}": "Proxy for {label}",
+  "Перегенерировать токен": "Regenerate token",
+  "Нажмите ещё раз: старый токен перестанет работать": "Click again: the old token will stop working",
 };

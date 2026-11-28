@@ -1,4 +1,5 @@
-import React from "react";
+import React, { useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { RefreshCw, KeyRound } from "lucide-react";
 import type { AppSettings, ProxyRuntimeStatus, UsageSummary } from "./types";
 import { BrandIcon } from "./BrandIcon";
@@ -43,12 +44,14 @@ const CopyRow: React.FC<{
   display: string;
   copyText: string;
   copyTitle: string;
-}> = ({ label, display, copyText, copyTitle }) => {
+  extra?: React.ReactNode;
+}> = ({ label, display, copyText, copyTitle, extra }) => {
   const { t } = useI18n();
   return (
   <div className="kv-row">
     <span className="w-10 shrink-0 text-[11px] font-medium text-[var(--fg-subtle)]">{label}</span>
     <span className="min-w-0 flex-1 truncate text-[12px] text-[var(--fg)] tabular-nums">{display}</span>
+    {extra}
     <CopyButton iconOnly text={copyText} title={copyTitle} copiedLabel={t("Скопировано")} />
   </div>
   );
@@ -94,6 +97,7 @@ const GatewayColumn: React.FC<GatewayColumnProps> = ({
           display={shorten(token)}
           copyText={token}
           copyTitle={t("Скопировать токен")}
+          extra={<RegenerateTokenButton />}
         />
       </div>
 
@@ -110,6 +114,61 @@ const GatewayColumn: React.FC<GatewayColumnProps> = ({
         />
       </div>
     </div>
+  );
+};
+
+const RegenerateTokenButton: React.FC = () => {
+  const { t } = useI18n();
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const timer = useRef<number | null>(null);
+
+  useEffect(
+    () => () => {
+      if (timer.current !== null) window.clearTimeout(timer.current);
+    },
+    [],
+  );
+
+  const handleClick = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (busy) return;
+    if (!confirming) {
+      setConfirming(true);
+      if (timer.current !== null) window.clearTimeout(timer.current);
+      timer.current = window.setTimeout(() => setConfirming(false), 3500);
+      return;
+    }
+    if (timer.current !== null) window.clearTimeout(timer.current);
+    setConfirming(false);
+    setBusy(true);
+    try {
+      await invoke("regenerate_api_key");
+    } catch {
+      // keep the button usable; errors surface in app logs
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const title = confirming
+    ? t("Нажмите ещё раз: старый токен перестанет работать")
+    : t("Перегенерировать токен");
+
+  return (
+    <button
+      type="button"
+      onClick={handleClick}
+      title={title}
+      aria-label={title}
+      className={`inline-flex size-6 shrink-0 items-center justify-center rounded-[5px] border transition-colors ${
+        confirming
+          ? "border-[var(--danger)] bg-[var(--danger-soft)] text-[var(--danger)]"
+          : "border-transparent text-[var(--fg-subtle)] hover:border-[var(--border)] hover:bg-[var(--bg-elevated)] hover:text-[var(--fg)]"
+      } ${busy ? "opacity-50" : ""}`}
+    >
+      <RefreshCw className={`size-3 ${busy ? "animate-spin" : ""}`} />
+    </button>
   );
 };
 

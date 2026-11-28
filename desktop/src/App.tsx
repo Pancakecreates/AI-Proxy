@@ -132,9 +132,13 @@ function AppInner({ onLanguageChange }: { onLanguageChange: (lang: string) => vo
     const u2 = listen("request-log", () => {
       invoke<UsageSummary>("get_usage_summary", { days: 30 }).then(setUsage).catch(() => {});
     });
+    const u3 = listen<AppSettings>("settings-updated", (ev) => {
+      setSettings(ev.payload);
+    });
     return () => {
       u1.then((f) => f()).catch(() => {});
       u2.then((f) => f()).catch(() => {});
+      u3.then((f) => f()).catch(() => {});
     };
   }, []);
 

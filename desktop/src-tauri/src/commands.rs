@@ -295,6 +295,25 @@ pub async fn save_settings(
 }
 
 #[tauri::command]
+pub async fn regenerate_api_key(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> Result<AppSettings, String> {
+    let raw = format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    );
+    let new_key = format!("aipx_{}", &raw[..40]);
+    let mut settings = state.settings.read().await.clone();
+    settings.api_key = Some(new_key);
+    state.db.save_settings(&settings)?;
+    *state.settings.write().await = settings.clone();
+    let _ = app.emit("settings-updated", &settings);
+    Ok(settings)
+}
+
+#[tauri::command]
 pub async fn detect_runtimes(state: State<'_, Arc<AppState>>) -> Result<DetectedRuntimes, String> {
     let s = state.settings.read().await.clone();
     Ok(detect_all_runtimes(&s))

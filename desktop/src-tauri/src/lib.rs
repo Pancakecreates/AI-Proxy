@@ -327,6 +327,7 @@ pub fn run() {
             commands::list_models,
             commands::get_settings,
             commands::save_settings,
+            commands::regenerate_api_key,
             commands::detect_runtimes,
             commands::download_provider_runtime,
             commands::get_accounts_and_quotas,
