@@ -47,7 +47,6 @@
         "installerIcon": "icons/icon.ico",
         "headerImage": "icons/nsis-header.bmp",
         "sidebarImage": "icons/nsis-sidebar.bmp",
-        "installerHooks": "nsis/hooks.nsh",
         "displayLanguageSelector": false,
         "startMenuFolder": "AI Proxy",
         "compression": "lzma"

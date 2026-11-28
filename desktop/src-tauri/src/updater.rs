@@ -203,40 +203,23 @@ fn spawn_windows_silent_updater(installer_path: &PathBuf) -> Result<(), String> 
     const CREATE_NO_WINDOW: u32 = 0x08000000;
     const DETACHED_PROCESS: u32 = 0x00000008;
 
+    const UPDATER_SCRIPT: &str = include_str!("../scripts/apply-update.ps1");
+
     let pid = std::process::id();
+    // current_exe() can return a verbatim \\?\ path that PowerShell cannot
+    // use, so normalize it before handing it to the script.
     let current_exe = std::env::current_exe()
         .ok()
-        .map(|p| p.to_string_lossy().to_string())
+        .map(|p| crate::discovery::simplify_unc_path(&p))
         .unwrap_or_default();
 
-    let esc = |s: &str| s.replace('\'', "''");
-    let inst_str = installer_path.to_string_lossy().to_string();
-    let is_msi = inst_str.to_lowercase().ends_with(".msi");
-
-    let install_cmd = if is_msi {
-        format!(
-            "Start-Process -FilePath 'msiexec.exe' -ArgumentList @('/i','{}','/qn','/norestart') -Wait -WindowStyle Hidden",
-            esc(&inst_str)
-        )
-    } else {
-        format!(
-            "Start-Process -FilePath '{}' -ArgumentList '/S' -Wait -WindowStyle Hidden",
-            esc(&inst_str)
-        )
-    };
-
-    let ps_script = format!(
-        "$ErrorActionPreference = 'SilentlyContinue'; \
-         try {{ Wait-Process -Id {pid} -Timeout 15 }} catch {{}}; \
-         Start-Sleep -Milliseconds 350; \
-         {install_cmd}; \
-         $candidates = @('{}', (Join-Path $env:LOCALAPPDATA 'AI Proxy\\AI Proxy.exe')); \
-         $target = $candidates | Where-Object {{ $_ -and (Test-Path $_) }} | Select-Object -First 1; \
-         if ($target) {{ Start-Process -FilePath $target }}; \
-         Remove-Item -LiteralPath '{}' -Force -ErrorAction SilentlyContinue",
-        esc(&current_exe),
-        esc(&inst_str),
-    );
+    let dir = installer_path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(std::env::temp_dir);
+    let script_path = dir.join("apply-update.ps1");
+    fs::write(&script_path, UPDATER_SCRIPT)
+        .map_err(|e| format!("Не удалось записать скрипт обновления: {e}"))?;
 
     let mut cmd = std::process::Command::new("powershell.exe");
     cmd.args([
@@ -246,8 +229,14 @@ fn spawn_windows_silent_updater(installer_path: &PathBuf) -> Result<(), String> 
         "Bypass",
         "-WindowStyle",
         "Hidden",
-        "-Command",
-        &ps_script,
+        "-File",
+        script_path.to_string_lossy().as_ref(),
+        "-InstallerPath",
+        installer_path.to_string_lossy().as_ref(),
+        "-AppExePath",
+        &current_exe,
+        "-AppPid",
+        &pid.to_string(),
     ]);
     cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS);
     cmd.spawn()

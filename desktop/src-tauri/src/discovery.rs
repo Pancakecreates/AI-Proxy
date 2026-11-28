@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-fn simplify_unc_path(path: &std::path::Path) -> String {
+pub(crate) fn simplify_unc_path(path: &std::path::Path) -> String {
     let s = path.to_string_lossy().to_string();
     if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
         format!(r"\\{rest}")

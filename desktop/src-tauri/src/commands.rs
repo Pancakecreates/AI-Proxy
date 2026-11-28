@@ -1089,11 +1089,21 @@ pub async fn download_and_launch_update(
     let (msg, should_restart) =
         crate::updater::download_and_launch_update(&app, asset_url, asset_name, release_url).await?;
     if should_restart {
-        state.stop_proxy_internal().await;
+        // Schedule the exit first: a slow or stuck proxy shutdown must never
+        // prevent the app from exiting, or the update installer will find
+        // locked files. The updater script force-kills us as a last resort.
         let app_h = app.clone();
         tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(600)).await;
             app_h.exit(0);
+        });
+        let st = state.inner().clone();
+        tokio::spawn(async move {
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                st.stop_proxy_internal(),
+            )
+            .await;
         });
     }
     Ok(msg)
