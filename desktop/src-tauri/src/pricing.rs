@@ -42,6 +42,7 @@ pub fn calculate_costs(
         + (output_tokens as f64 / 1_000_000.0) * pricing.output_per_1m_usd;
 
     let pay_per_token = pricing.billable
+        || backend_kind == BackendKind::External
         || (backend_kind == BackendKind::Grok
             && settings.xai_api_key.as_deref().map(|s| !s.trim().is_empty()).unwrap_or(false));
 

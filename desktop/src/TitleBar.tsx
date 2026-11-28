@@ -14,6 +14,7 @@ import {
   ArrowDownToLine,
 } from "lucide-react";
 import type { AppUpdateInfo, ProxyRuntimeStatus } from "./types";
+import { useI18n } from "./i18n";
 import { Button } from "./components/ui";
 
 interface TitleBarProps {
@@ -33,6 +34,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
   onCycleTheme,
   onToggleProxy,
 }) => {
+  const { t } = useI18n();
   const [maximized, setMaximized] = useState(false);
 
   useEffect(() => {
@@ -66,28 +68,26 @@ export const TitleBar: React.FC<TitleBarProps> = ({
   return (
     <header
       data-tauri-drag-region
-      className="flex h-10 shrink-0 items-center justify-between border-b bg-[var(--sidebar-bg)] pl-3 pr-0 select-none"
+      className="flex h-11 shrink-0 items-center justify-between border-b bg-[var(--sidebar-bg)] pl-3.5 pr-0 select-none"
     >
-      <div data-tauri-drag-region className="flex items-center gap-2.5 min-w-0">
-        <div
-          data-tauri-drag-region
-          className="flex size-5 items-center justify-center rounded-[6px] bg-[var(--bg-subtle)] border border-[var(--border-strong)]"
-        >
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path
-              d="M6 7L18 12L6 17"
-              stroke="var(--accent)"
-              strokeWidth="2.4"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-            <circle cx="6" cy="7" r="2.3" fill="var(--fg)" />
-            <circle cx="6" cy="17" r="2.3" fill="var(--fg)" />
-            <circle cx="18" cy="12" r="2.6" fill="var(--accent)" />
-          </svg>
-        </div>
-        <span data-tauri-drag-region className="text-[13px] font-semibold tracking-[-0.015em] text-[var(--fg)]">
+      <div data-tauri-drag-region className="flex min-w-0 items-center gap-2">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true" className="shrink-0">
+          <path
+            d="M5.5 7.5L18 12L5.5 16.5"
+            stroke="var(--accent)"
+            strokeWidth="1.7"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+          <circle cx="5.5" cy="7.5" r="2.1" fill="var(--fg-muted)" />
+          <circle cx="5.5" cy="16.5" r="2.1" fill="var(--fg-muted)" />
+          <circle cx="18" cy="12" r="2.4" fill="var(--accent)" />
+        </svg>
+        <span data-tauri-drag-region className="text-[12.5px] font-semibold tracking-[-0.01em] text-[var(--fg)]">
           AI Proxy
+        </span>
+        <span data-tauri-drag-region className="hidden text-[11px] text-[var(--fg-subtle)] sm:inline">
+          {t("локальный шлюз")}
         </span>
       </div>
 
@@ -96,8 +96,8 @@ export const TitleBar: React.FC<TitleBarProps> = ({
           <button
             type="button"
             onClick={onOpenUpdates}
-            title={`Доступна версия v${updateInfo.latestVersion}`}
-            className="mr-1 inline-flex h-6 items-center gap-1 rounded-full border border-[var(--accent)]/35 bg-[var(--accent-soft)] px-2 text-[11px] font-medium text-[var(--accent)] hover:brightness-110 transition-all"
+            title={t("Доступна версия v{v}", { v: updateInfo.latestVersion })}
+            className="mr-1 inline-flex h-6 items-center gap-1 rounded-[5px] bg-[var(--accent-soft)] px-1.5 text-[11px] font-medium text-[var(--accent)] transition-[filter] hover:brightness-110"
           >
             <ArrowDownToLine className="size-3" />
             <span>v{updateInfo.latestVersion}</span>
@@ -114,19 +114,19 @@ export const TitleBar: React.FC<TitleBarProps> = ({
           {starting ? (
             <Loader2 className="size-3 animate-spin" />
           ) : running ? (
-            <StopIcon className="size-3 fill-current" />
+            <StopIcon className="size-2.5 fill-current" />
           ) : (
-            <Play className="size-3 fill-current" />
+            <Play className="size-2.5 fill-current" />
           )}
-          <span>{running ? "Стоп" : "Старт"}</span>
+          <span>{running ? t("Стоп") : t("Старт")}</span>
         </Button>
 
         <Button
           variant="ghost"
           size="icon"
           onClick={onCycleTheme}
-          title={`Тема: ${theme === "auto" ? "Авто" : theme === "dark" ? "Тёмная" : "Светлая"}`}
-          aria-label="Переключить тему"
+          title={t("Тема: {theme}", { theme: theme === "auto" ? t("Авто") : theme === "dark" ? t("Тёмная") : t("Светлая") })}
+          aria-label={t("Переключить тему")}
           className="size-7"
         >
           {theme === "auto" ? (
@@ -138,28 +138,28 @@ export const TitleBar: React.FC<TitleBarProps> = ({
           )}
         </Button>
 
-        <div className="ml-1 flex h-full items-center border-l">
+        <div className="ml-1.5 flex h-full items-center border-l">
           <button
             type="button"
             onClick={handleMinimize}
-            aria-label="Свернуть"
-            className="inline-flex h-full w-10 items-center justify-center text-[var(--fg-muted)] hover:bg-[var(--bg-subtle)] hover:text-[var(--fg)] transition-colors"
+            aria-label={t("Свернуть")}
+            className="inline-flex h-full w-[46px] items-center justify-center text-[var(--fg-muted)] transition-colors hover:bg-[var(--bg-subtle)] hover:text-[var(--fg)]"
           >
             <Minus className="size-3.5" />
           </button>
           <button
             type="button"
             onClick={handleToggleMax}
-            aria-label={maximized ? "Восстановить" : "Развернуть"}
-            className="inline-flex h-full w-10 items-center justify-center text-[var(--fg-muted)] hover:bg-[var(--bg-subtle)] hover:text-[var(--fg)] transition-colors"
+            aria-label={maximized ? t("Восстановить") : t("Развернуть")}
+            className="inline-flex h-full w-[46px] items-center justify-center text-[var(--fg-muted)] transition-colors hover:bg-[var(--bg-subtle)] hover:text-[var(--fg)]"
           >
             {maximized ? <Copy className="size-3" /> : <Square className="size-3" />}
           </button>
           <button
             type="button"
             onClick={handleClose}
-            aria-label="Закрыть"
-            className="inline-flex h-full w-11 items-center justify-center text-[var(--fg-muted)] hover:bg-[#e81123] hover:text-white transition-colors"
+            aria-label={t("Закрыть")}
+            className="inline-flex h-full w-[46px] items-center justify-center text-[var(--fg-muted)] transition-colors hover:bg-[#c42b1c] hover:text-white"
           >
             <X className="size-3.5" />
           </button>

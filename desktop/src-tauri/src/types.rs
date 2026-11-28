@@ -152,6 +152,7 @@ pub enum BackendKind {
     Kimi,
     Hermes,
     Custom,
+    External,
 }
 
 impl BackendKind {
@@ -169,6 +170,7 @@ impl BackendKind {
             Self::Kimi => "kimi",
             Self::Hermes => "hermes",
             Self::Custom => "acp",
+            Self::External => "external",
         }
     }
 }
@@ -222,6 +224,41 @@ pub struct CustomAcpAgentConfig {
     pub auth_method_id: Option<String>,
     #[serde(default = "default_true")]
     pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProxyMode {
+    Inherit,
+    Disabled,
+    Custom,
+}
+
+impl Default for ProxyMode {
+    fn default() -> Self {
+        Self::Inherit
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalProviderConfig {
+    pub id: String,
+    pub display_name: String,
+    pub base_url: String,
+    #[serde(default)]
+    pub api_key: Option<String>,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub proxy_mode: ProxyMode,
+    #[serde(default)]
+    pub proxy_url: Option<String>,
+    #[serde(default)]
+    pub extra_headers: HashMap<String, String>,
+    /// Лимит max_tokens в запросах к провайдеру; пусто — 16384.
+    #[serde(default)]
+    pub max_output_tokens: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -296,6 +333,10 @@ pub struct AppSettings {
     pub hermes_path: Option<String>,
     #[serde(default)]
     pub custom_acp_agents: Vec<CustomAcpAgentConfig>,
+    #[serde(default)]
+    pub external_providers: Vec<ExternalProviderConfig>,
+    #[serde(default)]
+    pub proxy_url: Option<String>,
 
     pub model_map: HashMap<String, String>,
     pub custom_pricing: HashMap<String, ModelPricing>,
@@ -366,6 +407,8 @@ impl Default for AppSettings {
             enable_hermes: false,
             hermes_path: None,
             custom_acp_agents: Vec::new(),
+            external_providers: Vec::new(),
+            proxy_url: None,
 
             model_map: HashMap::new(),
             custom_pricing: HashMap::new(),
@@ -378,7 +421,7 @@ impl Default for AppSettings {
             auto_start_proxy: true,
             autostart_os: false,
             check_updates_on_start: true,
-            language: "ru".to_string(),
+            language: "auto".to_string(),
         }
     }
 }

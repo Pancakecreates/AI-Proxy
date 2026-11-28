@@ -26,12 +26,14 @@ import { readQuotaCache, refreshQuotas } from "./quotaCache";
 import {
   Button,
   Input,
+  PageHeader,
   Panel,
   PanelDescription,
   PanelHeader,
   PanelTitle,
   Switch,
 } from "./components/ui";
+import { plural, useI18n } from "./i18n";
 
 interface AccountsViewProps {
   settings: AppSettings;
@@ -60,6 +62,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
   onRefreshAll,
   onSaveSettings,
 }) => {
+  const { t, lang } = useI18n();
   const [quotas, setQuotas] = useState<AccountQuotaReport[]>(() => readQuotaCache());
   const [loadingQuotas, setLoadingQuotas] = useState(false);
   const [busyKey, setBusyKey] = useState<string | null>(null);
@@ -100,7 +103,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
     setFeedback(null);
     try {
       const installedPath = await invoke<string>("download_provider_runtime", { provider });
-      setFeedback({ kind: "ok", text: `CLI ${provider} установлен: ${installedPath}` });
+      setFeedback({ kind: "ok", text: t("CLI {provider} установлен: {path}", { provider, path: installedPath }) });
       onRefreshAll();
       await loadQuotas();
     } catch (e) {
@@ -133,7 +136,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
     setFeedback(null);
     try {
       const acc = await invoke("add_antigravity_account", { label: null });
-      setFeedback({ kind: "ok", text: `Добавлен аккаунт Antigravity: ${(acc as { label: string }).label}` });
+      setFeedback({ kind: "ok", text: t("Добавлен аккаунт Antigravity: {label}", { label: (acc as { label: string }).label }) });
       onRefreshAll();
       await loadQuotas();
     } catch (e) {
@@ -152,7 +155,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
         accountId: accountId ?? null,
         deleteFiles,
       });
-      setFeedback({ kind: "ok", text: `Аккаунт ${provider} отключён` });
+      setFeedback({ kind: "ok", text: t("Аккаунт {provider} отключён", { provider }) });
       onRefreshAll();
       await loadQuotas();
     } catch (e) {
@@ -224,39 +227,34 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
   const agyAccounts = runtimes?.antigravityAccounts ?? settings.antigravityAccounts;
 
   return (
-    <div className="h-full overflow-y-auto p-6">
-      <div className="max-w-6xl mx-auto space-y-5">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h1 className="text-lg font-semibold tracking-[-0.02em]">Аккаунты, вход, лимиты и CLI</h1>
-            <p className="text-xs text-[var(--fg-muted)] mt-0.5">
-              Подключение аккаунтов внутри приложения, проверка квот и автоустановка недостающих движков ACP и CLI.
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button variant="primary" size="sm" onClick={handleAddAgyAccount} disabled={busyKey !== null}>
-              <Plus className="size-3.5" />
-              <span>Добавить аккаунт Antigravity</span>
-            </Button>
-            <Button variant="secondary" size="sm" onClick={() => loadQuotas()} disabled={loadingQuotas}>
-              <RefreshCw className={`size-3.5 ${loadingQuotas ? "animate-spin" : ""}`} />
-              <span>Проверить лимиты</span>
-            </Button>
-          </div>
-        </div>
+    <div className="page-scroll">
+      <div className="page-inner">
+        <PageHeader
+          title={t("Аккаунты и CLI")}
+          description={t("Вход в аккаунты внутри приложения, квоты и автоустановка недостающих движков ACP и CLI.")}
+        >
+          <Button variant="primary" size="sm" onClick={handleAddAgyAccount} disabled={busyKey !== null}>
+            <Plus className="size-3.5" />
+            <span>{t("Добавить Antigravity")}</span>
+          </Button>
+          <Button variant="secondary" size="sm" onClick={() => loadQuotas()} disabled={loadingQuotas}>
+            <RefreshCw className={`size-3.5 ${loadingQuotas ? "animate-spin" : ""}`} />
+            <span>{t("Проверить лимиты")}</span>
+          </Button>
+        </PageHeader>
 
         {feedback && (
           <div
-            className={`rounded-[9px] border px-4 py-2.5 text-xs flex items-center gap-2 ${
+            className={`flex items-center gap-2 rounded-[6px] border px-3.5 py-2.5 text-[12px] ${
               feedback.kind === "ok"
-                ? "border-[var(--success)]/35 bg-[var(--success-soft)] text-[var(--success)]"
-                : "border-[var(--danger)]/35 bg-[var(--danger-soft)] text-[var(--danger)]"
+                ? "border-[var(--success)]/25 bg-[var(--success-soft)] text-[var(--success)]"
+                : "border-[var(--danger)]/25 bg-[var(--danger-soft)] text-[var(--danger)]"
             }`}
           >
             {feedback.kind === "ok" ? (
-              <CheckCircle2 className="size-4 shrink-0" />
+              <CheckCircle2 className="size-3.5 shrink-0" />
             ) : (
-              <AlertCircle className="size-4 shrink-0" />
+              <AlertCircle className="size-3.5 shrink-0" />
             )}
             <span className="break-all">{feedback.text}</span>
           </div>
@@ -265,66 +263,67 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
         <Panel className="overflow-hidden">
           <PanelHeader>
             <div className="flex items-center gap-2">
-              <BrandIcon brand="gemini" size={18} />
-              <PanelTitle>Аккаунты Antigravity и лимиты</PanelTitle>
+              <BrandIcon brand="gemini" size={17} />
+              <PanelTitle>Antigravity</PanelTitle>
             </div>
-            <span className="text-[11px] text-[var(--fg-muted)] tabular-nums">
-              Найдено: {agyAccounts.length}
+            <span className="text-[11px] tabular-nums text-[var(--fg-subtle)]">
+              {agyAccounts.length}{" "}
+              {plural(lang, agyAccounts.length, [t("аккаунт"), t("аккаунта"), t("аккаунтов")])}
             </span>
           </PanelHeader>
           <div className="divide-y">
             {agyAccounts.length === 0 ? (
-              <div className="p-6 text-center text-xs text-[var(--fg-muted)]">
-                Аккаунты Antigravity не найдены. Нажмите «Добавить аккаунт Antigravity», чтобы войти через Google.
+              <div className="px-4 py-10 text-center text-[12px] text-[var(--fg-muted)]">
+                {t("Аккаунты Antigravity не найдены. Нажмите «Добавить Antigravity», чтобы войти через Google.")}
               </div>
             ) : (
               agyAccounts.map((acc, idx) => {
                 const quota = quotas.find((q) => q.accountKey === `antigravity:${acc.id}`);
                 return (
-                  <div key={acc.id} className="p-4 space-y-3">
+                  <div key={acc.id} className="space-y-3 px-4 py-3.5">
                     <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div className="flex items-center gap-3 min-w-0">
-                        <span className="inline-flex size-6 items-center justify-center rounded-full border bg-[var(--bg)] text-[11px] font-semibold tabular-nums text-[var(--fg-muted)]">
+                      <div className="flex min-w-0 items-center gap-2.5">
+                        <span className="w-4 shrink-0 text-[11px] tabular-nums text-[var(--fg-subtle)]">
                           {idx + 1}
                         </span>
                         <div className="min-w-0">
-                          <div className="text-[13px] font-medium truncate text-[var(--fg)]">
+                          <div className="truncate text-[12.5px] font-medium text-[var(--fg)]">
                             {quota?.email || acc.email || acc.label}
                           </div>
-                          <div className="text-[11px] text-[var(--fg-subtle)] truncate">
-                            {acc.geminiDir}
-                          </div>
+                          <div className="truncate text-[11px] text-[var(--fg-subtle)]">{acc.geminiDir}</div>
                         </div>
                       </div>
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex items-center gap-1">
                         {quota?.verificationUrl && (
                           <Button
-                            variant="secondary"
+                            variant="ghost"
                             size="xs"
                             onClick={() => openUrl(quota.verificationUrl!).catch(() => {})}
-                            className="border-[var(--warning)]/40 bg-[var(--warning-soft)] text-[var(--warning)]"
+                            className="text-[var(--warning)] hover:bg-[var(--warning-soft)]"
                           >
                             <ExternalLink className="size-3" />
-                            <span>Подтвердить аккаунт</span>
+                            <span>{t("Подтвердить")}</span>
                           </Button>
                         )}
                         <Button
-                          variant="secondary"
+                          variant="ghost"
                           size="xs"
                           onClick={() => handleLogin("antigravity", acc.id)}
                           disabled={busyKey !== null}
                         >
                           <LogIn className="size-3" />
-                          <span>Обновить вход</span>
+                          <span>{t("Обновить вход")}</span>
                         </Button>
                         <Button
-                          variant="danger"
-                          size="xs"
+                          variant="ghost"
+                          size="icon"
                           onClick={() => handleRemoveOrLogout("antigravity", acc.id, acc.managed)}
                           disabled={busyKey !== null}
+                          title={t("Удалить аккаунт")}
+                          aria-label={t("Удалить аккаунт")}
+                          className="size-6 text-[var(--fg-subtle)] hover:text-[var(--danger)]"
                         >
                           <Trash2 className="size-3" />
-                          <span>Удалить</span>
                         </Button>
                       </div>
                     </div>
@@ -332,24 +331,24 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                     {quota?.error && <div className="text-[11px] text-[var(--fg-muted)]">{quota.error}</div>}
 
                     {quota && quota.windows.length > 0 && (
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 pt-1">
+                      <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
                         {quota.windows.map((w, wi) => (
-                          <div key={wi} className="rounded-[8px] border bg-[var(--bg)] p-2.5 space-y-1.5">
-                            <div className="flex items-center justify-between text-[11px]">
-                              <span className="font-medium truncate">{w.label}</span>
-                              <span className="tabular-nums text-[var(--fg-muted)]">
-                                Осталось {w.remainingPercent.toFixed(0)}%
+                          <div key={wi} className="space-y-2 rounded-[6px] bg-[var(--bg-subtle)] px-3 py-2.5">
+                            <div className="flex items-center justify-between gap-2 text-[11px]">
+                              <span className="truncate font-medium text-[var(--fg)]">{w.label}</span>
+                              <span className="shrink-0 tabular-nums text-[var(--fg-muted)]">
+                                {t("осталось {percent}%", { percent: w.remainingPercent.toFixed(0) })}
                               </span>
                             </div>
-                            <div className="h-1.5 w-full rounded-full bg-[var(--bg-subtle)] overflow-hidden">
+                            <div className="progress-track">
                               <div
-                                className="h-full rounded-full bg-[var(--accent)] transition-[width]"
+                                className="progress-fill"
                                 style={{ width: `${Math.max(2, Math.min(100, w.remainingPercent))}%` }}
                               />
                             </div>
                             {w.resetsAt && (
-                              <div className="text-[10px] text-[var(--fg-subtle)] tabular-nums">
-                                Сброс: {new Date(w.resetsAt).toLocaleString()}
+                              <div className="text-[11px] tabular-nums text-[var(--fg-subtle)]">
+                                {t("сброс")} {new Date(w.resetsAt).toLocaleString(lang === "ru" ? "ru-RU" : "en-US", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
                               </div>
                             )}
                           </div>
@@ -366,57 +365,53 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
         {quotas
           .filter((q) => q.provider === "codex")
           .map((cq) => (
-            <Panel key={cq.accountKey} className="p-4 space-y-3">
-              <div className="flex items-center justify-between">
+            <Panel key={cq.accountKey} className="overflow-hidden">
+              <PanelHeader>
                 <div className="flex items-center gap-2.5">
-                  <BrandIcon brand="openai" size={18} />
+                  <BrandIcon brand="openai" size={17} />
                   <div>
-                    <div className="text-[13px] font-semibold tracking-[-0.01em]">Codex (ChatGPT) — лимиты</div>
-                    <div className="text-[11px] text-[var(--fg-muted)]">
-                      {cq.signedIn ? cq.email || "Авторизован" : "Не выполнен вход"}
+                    <PanelTitle>Codex</PanelTitle>
+                    <div className="text-[11px] text-[var(--fg-subtle)]">
+                      {cq.signedIn ? cq.email || t("Авторизован") : t("Не выполнен вход")}
                     </div>
                   </div>
                 </div>
-                <div className="flex items-center gap-1.5">
-                  <Button
-                    variant="secondary"
-                    size="xs"
-                    onClick={() => handleLogin("codex")}
-                    disabled={busyKey !== null}
-                  >
+                <div className="flex items-center gap-1">
+                  <Button variant="ghost" size="xs" onClick={() => handleLogin("codex")} disabled={busyKey !== null}>
                     <LogIn className="size-3" />
-                    <span>Войти</span>
+                    <span>{t("Войти")}</span>
                   </Button>
                   <Button
-                    variant="danger"
+                    variant="ghost"
                     size="xs"
                     onClick={() => handleRemoveOrLogout("codex")}
                     disabled={busyKey !== null}
+                    className="hover:text-[var(--danger)]"
                   >
                     <LogOut className="size-3" />
-                    <span>Выйти</span>
+                    <span>{t("Выйти")}</span>
                   </Button>
                 </div>
-              </div>
+              </PanelHeader>
               {cq.windows.length > 0 && (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                <div className="grid grid-cols-1 gap-2 p-4 md:grid-cols-2">
                   {cq.windows.map((w, i) => (
-                    <div key={i} className="rounded-[8px] border bg-[var(--bg)] p-2.5 space-y-1.5">
-                      <div className="flex items-center justify-between text-[11px]">
-                        <span className="font-medium">{w.label}</span>
-                        <span className="tabular-nums text-[var(--fg-muted)]">
-                          Использовано {w.usedPercent.toFixed(0)}% · Осталось {w.remainingPercent.toFixed(0)}%
+                    <div key={i} className="space-y-2 rounded-[6px] bg-[var(--bg-subtle)] px-3 py-2.5">
+                      <div className="flex items-center justify-between gap-2 text-[11px]">
+                        <span className="truncate font-medium text-[var(--fg)]">{w.label}</span>
+                        <span className="shrink-0 tabular-nums text-[var(--fg-muted)]">
+                          {t("{percent}% использовано", { percent: w.usedPercent.toFixed(0) })}
                         </span>
                       </div>
-                      <div className="h-1.5 w-full rounded-full bg-[var(--bg-subtle)] overflow-hidden">
+                      <div className="progress-track">
                         <div
-                          className="h-full rounded-full bg-[var(--accent)]"
+                          className="progress-fill"
                           style={{ width: `${Math.max(2, Math.min(100, w.remainingPercent))}%` }}
                         />
                       </div>
                       {w.resetsAt && (
-                        <div className="text-[10px] text-[var(--fg-subtle)] tabular-nums">
-                          Сброс: {new Date(w.resetsAt).toLocaleString()}
+                        <div className="text-[11px] tabular-nums text-[var(--fg-subtle)]">
+                          {t("сброс")} {new Date(w.resetsAt).toLocaleString(lang === "ru" ? "ru-RU" : "en-US", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
                         </div>
                       )}
                     </div>
@@ -428,9 +423,9 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
 
         <Panel className="overflow-hidden">
           <PanelHeader className="flex-col items-start gap-0.5">
-            <PanelTitle>Провайдеры и установка CLI</PanelTitle>
+            <PanelTitle>{t("Провайдеры и установка CLI")}</PanelTitle>
             <PanelDescription>
-              Включайте нужные движки, скачивайте отсутствующие CLI в один клик и авторизуйтесь прямо из окна.
+              {t("Включайте нужные движки, скачивайте отсутствующие CLI и входите в аккаунт прямо из окна.")}
             </PanelDescription>
           </PanelHeader>
           <div className="divide-y">
@@ -442,60 +437,60 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
               return (
                 <div
                   key={p.key}
-                  className="flex flex-wrap items-center justify-between gap-3 px-4 py-[var(--density-cell-y)] text-xs hover:bg-[var(--bg-subtle)]/35 transition-colors"
+                  className="flex flex-wrap items-center justify-between gap-3 px-4 py-[var(--density-cell-y)] transition-colors hover:bg-[var(--bg-subtle)]"
                 >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <BrandIcon brand={p.brand} size={20} />
+                  <div className="flex min-w-0 items-center gap-2.5">
+                    <BrandIcon brand={p.brand} size={18} />
                     <div className="min-w-0">
-                      <div className="font-medium text-[13px]">{p.name}</div>
-                      <div className="text-[11px] text-[var(--fg-subtle)] truncate max-w-md">
+                      <div className="text-[12px] font-medium text-[var(--fg)]">{p.name}</div>
+                      <div className="max-w-md truncate text-[11px] text-[var(--fg-subtle)]">
                         {prog && prog.status !== "done"
                           ? `${prog.message} (${Math.round(prog.progressPercent)}%)`
-                          : exe || "CLI не найден на диске"}
+                          : exe || t("CLI не найден на диске")}
                       </div>
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2 shrink-0">
+                  <div className="flex shrink-0 items-center gap-1.5">
                     {!exe && p.downloadable && (
                       <Button
-                        variant="primary"
+                        variant="secondary"
                         size="xs"
                         onClick={() => handleDownload(p.key)}
                         disabled={busyKey !== null}
                       >
                         <Download className="size-3" />
-                        <span>{isBusy ? "Установка..." : "Скачать CLI"}</span>
+                        <span>{isBusy ? t("Установка…") : t("Скачать CLI")}</span>
                       </Button>
                     )}
 
                     {exe && p.loginable && (
                       <Button
-                        variant="secondary"
+                        variant="ghost"
                         size="xs"
                         onClick={() => handleLogin(p.key)}
                         disabled={busyKey !== null}
                       >
                         <LogIn className="size-3" />
-                        <span>Войти</span>
+                        <span>{t("Войти")}</span>
                       </Button>
                     )}
 
                     {exe && ["devin", "grok", "codex"].includes(p.key) && (
                       <Button
                         variant="ghost"
-                        size="xs"
+                        size="icon"
                         onClick={() => handleRemoveOrLogout(p.key)}
                         disabled={busyKey !== null}
-                        title="Выйти из аккаунта"
-                        aria-label="Выйти из аккаунта"
-                        className="hover:text-[var(--danger)]"
+                        title={t("Выйти из аккаунта")}
+                        aria-label={t("Выйти из аккаунта")}
+                        className="size-6 text-[var(--fg-subtle)] hover:text-[var(--danger)]"
                       >
                         <LogOut className="size-3" />
                       </Button>
                     )}
 
-                    <div className="pl-1">
+                    <div className="pl-1.5">
                       <Switch
                         checked={enabled}
                         onCheckedChange={() => handleToggleProvider(p.enableKey, enabled)}
@@ -508,24 +503,24 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
           </div>
         </Panel>
 
-        <Panel className="p-4 space-y-4">
-          <div className="flex items-center gap-2.5">
-            <Terminal className="size-4 text-[var(--fg-muted)]" />
-            <div>
-              <PanelTitle>Custom ACP агенты</PanelTitle>
-              <PanelDescription>
-                Подключайте любой сторонний ACP-совместимый CLI агент (команда + аргументы).
-              </PanelDescription>
+        <Panel className="overflow-hidden">
+          <PanelHeader>
+            <div className="flex items-center gap-2">
+              <Terminal className="size-3.5 text-[var(--fg-muted)]" />
+              <PanelTitle>{t("Custom ACP агенты")}</PanelTitle>
             </div>
-          </div>
+            <PanelDescription className="order-3 w-full">
+              {t("Любой сторонний ACP-совместимый CLI: команда, аргументы и метод авторизации.")}
+            </PanelDescription>
+          </PanelHeader>
 
           {settings.customAcpAgents.length > 0 && (
-            <div className="divide-y rounded-[8px] border bg-[var(--bg)]">
+            <div className="divide-y border-b">
               {settings.customAcpAgents.map((c) => (
-                <div key={c.id} className="flex items-center justify-between gap-3 px-3 py-2 text-xs">
+                <div key={c.id} className="flex items-center justify-between gap-3 px-4 py-2 text-[12px]">
                   <div className="min-w-0">
-                    <div className="font-medium">{c.name}</div>
-                    <div className="text-[11px] text-[var(--fg-subtle)] truncate">
+                    <div className="font-medium text-[var(--fg)]">{c.name}</div>
+                    <div className="truncate text-[11px] text-[var(--fg-subtle)]">
                       {c.command} {c.args.join(" ")}
                     </div>
                   </div>
@@ -533,8 +528,8 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                     variant="ghost"
                     size="icon"
                     onClick={() => handleDeleteCustomAcp(c.id)}
-                    aria-label="Удалить агента"
-                    className="size-7 hover:text-[var(--danger)]"
+                    aria-label={t("Удалить агента")}
+                    className="size-6 text-[var(--fg-subtle)] hover:text-[var(--danger)]"
                   >
                     <Trash2 className="size-3.5" />
                   </Button>
@@ -543,21 +538,24 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
             </div>
           )}
 
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+          <div className="grid grid-cols-1 gap-2 p-4 md:grid-cols-4">
             <Input
               value={newAcpName}
               onChange={(e) => setNewAcpName(e.target.value)}
-              placeholder="Название (напр. My Agent)"
+              placeholder={t("Название")}
+              aria-label={t("Название агента")}
             />
             <Input
               value={newAcpCmd}
               onChange={(e) => setNewAcpCmd(e.target.value)}
-              placeholder="Команда или путь к exe"
+              placeholder={t("Команда или путь к exe")}
+              aria-label={t("Команда агента")}
             />
             <Input
               value={newAcpArgs}
               onChange={(e) => setNewAcpArgs(e.target.value)}
-              placeholder="Аргументы (напр. acp)"
+              placeholder={t("Аргументы")}
+              aria-label={t("Аргументы")}
             />
             <div className="flex gap-2">
               <Input
@@ -565,6 +563,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                 onChange={(e) => setNewAcpAuth(e.target.value)}
                 placeholder="Auth ID"
                 className="flex-1"
+                aria-label="Auth ID"
               />
               <Button
                 variant="primary"
@@ -573,7 +572,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                 disabled={!newAcpName.trim() || !newAcpCmd.trim()}
               >
                 <Plus className="size-3.5" />
-                <span>Добавить</span>
+                <span>{t("Добавить")}</span>
               </Button>
             </div>
           </div>

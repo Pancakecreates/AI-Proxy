@@ -3,7 +3,9 @@ import { Check, Copy, MessageSquare } from "lucide-react";
 import type { BackendModelEntry } from "./types";
 import { BrandIcon } from "./BrandIcon";
 import { Select } from "./Select";
-import { Badge, Button, Panel, SearchInput } from "./components/ui";
+import { Button, PageHeader, Panel, SearchInput } from "./components/ui";
+import { formatTokens } from "./format";
+import { useI18n } from "./i18n";
 
 interface ModelsViewProps {
   models: BackendModelEntry[];
@@ -11,6 +13,7 @@ interface ModelsViewProps {
 }
 
 export const ModelsView: React.FC<ModelsViewProps> = ({ models, onTestModel }) => {
+  const { t } = useI18n();
   const [search, setSearch] = useState("");
   const [backendFilter, setBackendFilter] = useState("all");
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -45,95 +48,101 @@ export const ModelsView: React.FC<ModelsViewProps> = ({ models, onTestModel }) =
   };
 
   return (
-    <div className="flex flex-col h-full overflow-hidden">
-      <div className="border-b bg-[var(--bg-elevated)] px-6 py-3.5 flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-lg font-semibold tracking-[-0.02em]">Каталог моделей</h1>
-          <p className="text-xs text-[var(--fg-muted)] tabular-nums mt-0.5">
-            Доступно {models.length} моделей со всех активных провайдеров и аккаунтов
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
+    <div className="flex h-full flex-col overflow-hidden">
+      <div className="border-b px-6 py-3.5">
+        <PageHeader
+          title={t("Модели")}
+          description={t("{count} моделей со всех активных провайдеров и аккаунтов", { count: models.length })}
+        >
           <SearchInput
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Поиск модели или провайдера..."
-            className="w-64"
+            placeholder={t("Поиск модели или провайдера")}
+            className="w-60"
           />
           <Select
             value={backendFilter}
             onChange={setBackendFilter}
-            ariaLabel="Провайдер"
-            className="w-52"
+            ariaLabel={t("Провайдер")}
+            className="w-48"
             options={[
-              { value: "all", label: `Все провайдеры (${models.length})` },
+              { value: "all", label: t("Все провайдеры · {count}", { count: models.length }) },
               ...backends.map(([k, lbl]) => ({ value: k, label: lbl })),
             ]}
           />
-        </div>
+        </PageHeader>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-6">
-        <Panel className="max-w-6xl mx-auto overflow-hidden">
+      <div className="page-scroll p-6">
+        <Panel className="mx-auto max-w-6xl overflow-hidden">
           <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse text-xs">
+            <table className="data-table">
               <thead>
-                <tr className="border-b bg-[var(--bg-subtle)]/70 text-[var(--fg-muted)]">
-                  <th className="py-2.5 px-3 font-medium">Модель</th>
-                  <th className="py-2.5 px-3 font-medium">Провайдер</th>
-                  <th className="py-2.5 px-3 font-medium">ID для OpenAI и Codex</th>
-                  <th className="py-2.5 px-3 font-medium">Контекст</th>
-                  <th className="py-2.5 px-3 font-medium text-right">Действия</th>
+                <tr>
+                  <th>{t("Модель")}</th>
+                  <th>{t("Провайдер")}</th>
+                  <th>{t("ID для OpenAI и Codex")}</th>
+                  <th className="text-right">{t("Контекст")}</th>
+                  <th className="text-right">{t("Действия")}</th>
                 </tr>
               </thead>
-              <tbody className="divide-y">
+              <tbody>
                 {filtered.length === 0 ? (
                   <tr>
                     <td colSpan={5} className="py-12 text-center text-[var(--fg-muted)]">
-                      Модели не найдены. Запустите прокси или нажмите «Обновить модели».
+                      {t("Модели не найдены. Запустите прокси или нажмите «Обновить модели».")}
                     </td>
                   </tr>
                 ) : (
                   filtered.map((m) => (
-                    <tr key={m.qualifiedId} className="hover:bg-[var(--bg-subtle)]/45 transition-colors">
-                      <td className="py-[var(--density-cell-y)] px-3">
+                    <tr key={m.qualifiedId}>
+                      <td>
                         <div className="flex items-center gap-2.5">
-                          <BrandIcon brand={m.brand} size={20} />
+                          <BrandIcon brand={m.brand} size={18} />
                           <div className="min-w-0">
-                            <div className="font-medium text-[var(--fg)] truncate">{m.displayName}</div>
-                            <div className="text-[11px] text-[var(--fg-subtle)] truncate">{m.description}</div>
+                            <div className="truncate text-[12px] font-medium text-[var(--fg)]">
+                              {m.displayName}
+                            </div>
+                            <div className="truncate text-[11px] text-[var(--fg-subtle)]">
+                              {m.description}
+                            </div>
                           </div>
                         </div>
                       </td>
-                      <td className="py-[var(--density-cell-y)] px-3 whitespace-nowrap">
-                        <Badge variant="neutral">{m.backendLabel}</Badge>
+                      <td className="whitespace-nowrap text-[11px] text-[var(--fg-muted)]">
+                        {m.backendLabel}
                       </td>
-                      <td className="py-[var(--density-cell-y)] px-3 text-[11px] text-[var(--fg-muted)]">
-                        <div className="flex items-center gap-1.5">
-                          <span className="truncate max-w-[230px]">{m.qualifiedId}</span>
-                          <button
-                            type="button"
+                      <td>
+                        <div className="flex items-center gap-1">
+                          <span className="max-w-[220px] truncate text-[11px] text-[var(--fg-muted)]">
+                            {m.qualifiedId}
+                          </span>
+                          <Button
+                            variant="ghost"
+                            size="icon"
                             onClick={() => copyId(`q-${m.qualifiedId}`, m.qualifiedId)}
-                            title="Скопировать ID для OpenAI и Codex"
-                            className="text-[var(--fg-subtle)] hover:text-[var(--fg)] transition-colors"
+                            title={t("Скопировать ID для OpenAI и Codex")}
+                            aria-label={t("Скопировать ID для OpenAI и Codex")}
+                            className="size-6 rounded-[4px] text-[var(--fg-subtle)] hover:text-[var(--fg)]"
                           >
                             {copiedKey === `q-${m.qualifiedId}` ? (
                               <Check className="size-3 text-[var(--success)]" />
                             ) : (
                               <Copy className="size-3" />
                             )}
-                          </button>
+                          </Button>
                         </div>
                       </td>
-                      <td className="py-[var(--density-cell-y)] px-3 tabular-nums text-[var(--fg-muted)] whitespace-nowrap">
-                        {Math.round(m.maxInputTokens / 1000)}k
+                      <td className="whitespace-nowrap text-right tabular-nums text-[11px] text-[var(--fg-muted)]">
+                        {formatTokens(m.maxInputTokens)}
                       </td>
-                      <td className="py-[var(--density-cell-y)] px-3 text-right whitespace-nowrap">
-                        <div className="inline-flex items-center gap-1.5">
+                      <td className="whitespace-nowrap text-right">
+                        <div className="inline-flex items-center gap-1">
                           <Button
-                            variant="secondary"
+                            variant="ghost"
                             size="xs"
                             onClick={() => copyId(`g-${m.qualifiedId}`, m.gatewayId)}
+                            className="text-[var(--fg-muted)]"
                           >
                             {copiedKey === `g-${m.qualifiedId}` ? (
                               <Check className="size-3 text-[var(--success)]" />
@@ -142,13 +151,9 @@ export const ModelsView: React.FC<ModelsViewProps> = ({ models, onTestModel }) =
                             )}
                             <span>Claude ID</span>
                           </Button>
-                          <Button
-                            variant="primary"
-                            size="xs"
-                            onClick={() => onTestModel(m.qualifiedId)}
-                          >
+                          <Button variant="secondary" size="xs" onClick={() => onTestModel(m.qualifiedId)}>
                             <MessageSquare className="size-3" />
-                            <span>Тест</span>
+                            <span>{t("Тест")}</span>
                           </Button>
                         </div>
                       </td>

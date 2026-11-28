@@ -205,11 +205,14 @@ impl AppState {
             let mut g = self.server_handles.lock().await;
             std::mem::take(&mut *g)
         };
+        let was_running = !handles.is_empty();
         for h in handles {
             let _ = h.shutdown_tx.send(());
         }
         self.router.shutdown().await;
-        (self.log)("info", "http", "Прокси остановлен");
+        if was_running {
+            (self.log)("info", "http", "Прокси остановлен");
+        }
     }
 }
 
@@ -312,7 +315,7 @@ pub async fn get_accounts_and_quotas(state: State<'_, Arc<AppState>>) -> Result<
     let agy_futures: Vec<_> = rt
         .antigravity_accounts
         .iter()
-        .map(|acc| fetch_antigravity_quota(acc))
+        .map(|acc| fetch_antigravity_quota(acc, s.proxy_url.as_deref()))
         .collect();
     let agy_results = futures::future::join_all(agy_futures).await;
     reports.extend(agy_results);
@@ -860,6 +863,66 @@ pub async fn quit_app(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result
     state.stop_proxy_internal().await;
     app.exit(0);
     Ok(())
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalProviderTestResult {
+    pub models_count: usize,
+    pub sample_models: Vec<String>,
+    pub latency_ms: u64,
+}
+
+#[tauri::command]
+pub async fn test_external_provider(
+    state: State<'_, Arc<AppState>>,
+    config: crate::types::ExternalProviderConfig,
+) -> Result<ExternalProviderTestResult, String> {
+    let settings = state.settings.clone();
+    let log: crate::acp_client::LogFn = Arc::new(|_, _, _| {});
+    let backend = crate::external_client::ExternalBackend::new(config, settings, log);
+    let started = std::time::Instant::now();
+    let models = backend.warm_up(true).await?;
+    let sample = models
+        .iter()
+        .take(6)
+        .map(|m| m.native_id.clone())
+        .collect::<Vec<_>>();
+    Ok(ExternalProviderTestResult {
+        models_count: models.len(),
+        sample_models: sample,
+        latency_ms: started.elapsed().as_millis() as u64,
+    })
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyTestResult {
+    pub latency_ms: u64,
+    pub external_ip: Option<String>,
+}
+
+#[tauri::command]
+pub async fn test_proxy_connection(proxy_url: String) -> Result<ProxyTestResult, String> {
+    let client = crate::net::build_client(
+        Some(&proxy_url),
+        Some(std::time::Duration::from_secs(15)),
+    )?;
+    let started = std::time::Instant::now();
+    let resp = client
+        .get("https://api.ipify.org")
+        .send()
+        .await
+        .map_err(|e| format!("Соединение через прокси не удалось: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("Проверочный запрос через прокси вернул HTTP {}", resp.status()));
+    }
+    let body = resp.text().await.unwrap_or_default();
+    let ip = body.trim().chars().take(64).collect::<String>();
+    Ok(ProxyTestResult {
+        latency_ms: started.elapsed().as_millis() as u64,
+        external_ip: if ip.is_empty() { None } else { Some(ip) },
+    })
 }
 
 #[tauri::command]

@@ -46,6 +46,20 @@ export interface ModelPricing {
   billable: boolean;
 }
 
+export type ProxyMode = "inherit" | "disabled" | "custom";
+
+export interface ExternalProviderConfig {
+  id: string;
+  displayName: string;
+  baseUrl: string;
+  apiKey: string | null;
+  enabled: boolean;
+  proxyMode: ProxyMode;
+  proxyUrl: string | null;
+  extraHeaders: Record<string, string>;
+  maxOutputTokens: number | null;
+}
+
 export interface AppSettings {
   host: string;
   anthropicPort: number;
@@ -94,6 +108,8 @@ export interface AppSettings {
   enableHermes: boolean;
   hermesPath: string | null;
   customAcpAgents: CustomAcpAgentConfig[];
+  externalProviders: ExternalProviderConfig[];
+  proxyUrl: string | null;
 
   modelMap: Record<string, string>;
   customPricing: Record<string, ModelPricing>;

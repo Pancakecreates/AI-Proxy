@@ -12,19 +12,29 @@ import type {
 import { Select } from "./Select";
 import { BrandIcon } from "./BrandIcon";
 import { resolveAccountInfo } from "./backendDisplay";
-import { Badge, Button, Panel, SearchInput, Segmented } from "./components/ui";
+import { Button, PageHeader, Panel, SearchInput, Segmented } from "./components/ui";
+import { formatDuration, formatTokens } from "./format";
 
+import { useI18n } from "./i18n";
 interface LogsViewProps {
   backends?: BackendHealthStatus[];
   antigravityAccounts?: AntigravityAccountConfig[];
   customAcpAgents?: CustomAcpAgentConfig[];
 }
 
+const LEVEL_COLOR: Record<string, string> = {
+  error: "text-[var(--danger)]",
+  warn: "text-[var(--warning)]",
+  debug: "text-[var(--fg-subtle)]",
+  info: "text-[var(--fg-muted)]",
+};
+
 export const LogsView: React.FC<LogsViewProps> = ({
   backends = [],
   antigravityAccounts = [],
   customAcpAgents = [],
 }) => {
+  const { t, lang } = useI18n();
   const [subTab, setSubTab] = useState<"requests" | "system">("requests");
   const [reqLogs, setReqLogs] = useState<RequestLogEntry[]>([]);
   const [appLogs, setAppLogs] = useState<AppLogEntry[]>([]);
@@ -84,33 +94,32 @@ export const LogsView: React.FC<LogsViewProps> = ({
   };
 
   return (
-    <div className="flex flex-col h-full overflow-hidden">
-      <div className="border-b bg-[var(--bg-elevated)] px-6 py-3 flex flex-wrap items-center justify-between gap-3">
-        <Segmented
-          value={subTab}
-          onChange={setSubTab}
-          options={[
-            { value: "requests", label: `HTTP и чат запросы (${reqLogs.length})` },
-            { value: "system", label: `Системные логи CLI (${appLogs.length})` },
-          ]}
-        />
-
-        <div className="flex items-center gap-2">
+    <div className="flex h-full flex-col overflow-hidden">
+      <div className="border-b px-6 py-3.5">
+        <PageHeader title={t("Логи")} description={t("Запросы шлюза и системные события CLI.")}>
+          <Segmented
+            value={subTab}
+            onChange={setSubTab}
+            options={[
+              { value: "requests", label: t("Запросы · {count}", { count: reqLogs.length }) },
+              { value: "system", label: t("Системные · {count}", { count: appLogs.length }) },
+            ]}
+          />
           {subTab === "requests" ? (
             <SearchInput
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Поиск по модели, аккаунту или тексту..."
-              className="w-64"
+              placeholder={t("Модель, аккаунт или текст")}
+              className="w-56"
             />
           ) : (
             <Select
               value={levelFilter}
               onChange={setLevelFilter}
-              ariaLabel="Уровень логов"
-              className="w-36"
+              ariaLabel={t("Уровень логов")}
+              className="w-32"
               options={[
-                { value: "all", label: "Все уровни" },
+                { value: "all", label: t("Все уровни") },
                 { value: "info", label: "Info" },
                 { value: "warn", label: "Warn" },
                 { value: "error", label: "Error" },
@@ -118,39 +127,38 @@ export const LogsView: React.FC<LogsViewProps> = ({
               ]}
             />
           )}
-          <Button variant="secondary" size="icon" onClick={loadLogs} title="Обновить логи" aria-label="Обновить логи">
+          <Button variant="secondary" size="icon" onClick={loadLogs} title={t("Обновить логи")} aria-label={t("Обновить логи")}>
             <RefreshCw className="size-3.5" />
           </Button>
-          <Button variant="danger" size="sm" onClick={handleClear}>
+          <Button variant="ghost" size="icon" onClick={handleClear} title={t("Очистить")} aria-label={t("Очистить логи")}>
             <Trash2 className="size-3.5" />
-            <span>Очистить</span>
           </Button>
-        </div>
+        </PageHeader>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-6">
+      <div className="page-scroll p-6">
         {subTab === "requests" ? (
-          <Panel className="max-w-7xl mx-auto overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs text-left border-collapse">
-                <thead className="border-b bg-[var(--bg-subtle)]/70 text-[var(--fg-muted)]">
+          <Panel className="mx-auto max-w-7xl overflow-hidden">
+            <div className="max-h-[calc(100dvh-13rem)] overflow-auto">
+              <table className="data-table">
+                <thead>
                   <tr>
-                    <th className="py-2.5 px-3 font-medium whitespace-nowrap">Время</th>
-                    <th className="py-2.5 px-3 font-medium whitespace-nowrap">Протокол</th>
-                    <th className="py-2.5 px-3 font-medium whitespace-nowrap">Аккаунт</th>
-                    <th className="py-2.5 px-3 font-medium whitespace-nowrap">Модель</th>
-                    <th className="py-2.5 px-3 font-medium whitespace-nowrap">Усилие</th>
-                    <th className="py-2.5 px-3 font-medium whitespace-nowrap">Статус</th>
-                    <th className="py-2.5 px-3 font-medium text-right whitespace-nowrap">Токены</th>
-                    <th className="py-2.5 px-3 font-medium text-right whitespace-nowrap">Задержка</th>
-                    <th className="py-2.5 px-3 font-medium text-right whitespace-nowrap">Стоимость</th>
+                    <th>{t("Время")}</th>
+                    <th>{t("Протокол")}</th>
+                    <th>{t("Аккаунт")}</th>
+                    <th>{t("Модель")}</th>
+                    <th>{t("Усилие")}</th>
+                    <th>{t("Статус")}</th>
+                    <th className="text-right">{t("Токены")}</th>
+                    <th className="text-right">{t("Задержка")}</th>
+                    <th className="text-right">{t("Стоимость")}</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y">
+                <tbody>
                   {reqLogs.length === 0 ? (
                     <tr>
                       <td colSpan={9} className="py-12 text-center text-[var(--fg-muted)]">
-                        Логи запросов пусты.
+                        {t("Логи запросов пусты.")}
                       </td>
                     </tr>
                   ) : (
@@ -164,40 +172,39 @@ export const LogsView: React.FC<LogsViewProps> = ({
                         customAcpAgents,
                       });
                       const isExpanded = expandedId === r.id;
+                      const ok = r.status >= 200 && r.status < 400;
 
                       return (
                         <React.Fragment key={r.id}>
                           <tr
                             onClick={() => setExpandedId(isExpanded ? null : r.id)}
-                            className={`cursor-pointer transition-colors ${
-                              isExpanded ? "bg-[var(--bg-subtle)]/75" : "hover:bg-[var(--bg-subtle)]/45"
-                            }`}
+                            className={`cursor-pointer ${isExpanded ? "bg-[var(--bg-subtle)]" : ""}`}
                           >
-                            <td className="py-[var(--density-cell-y)] px-3 tabular-nums text-[var(--fg-subtle)] whitespace-nowrap">
-                              {new Date(r.createdAt).toLocaleTimeString()}
+                            <td className="whitespace-nowrap tabular-nums text-[var(--fg-subtle)]">
+                              {new Date(r.createdAt).toLocaleTimeString(lang === "ru" ? "ru-RU" : "en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
                             </td>
-                            <td className="py-[var(--density-cell-y)] px-3 whitespace-nowrap">
-                              <Badge variant="mono" className="text-[10px]">
-                                {r.protocol}
-                              </Badge>
+                            <td className="whitespace-nowrap text-[11px] text-[var(--fg-muted)]">
+                              {r.protocol}
                             </td>
-                            <td className="py-[var(--density-cell-y)] px-3 max-w-[200px]">
+                            <td className="max-w-[150px]">
                               {acc.title === "—" ? (
                                 <span className="text-[var(--fg-subtle)]">—</span>
                               ) : (
-                                <div className="flex items-center gap-2 min-w-0">
+                                <div className="flex min-w-0 items-center gap-2">
                                   <BrandIcon brand={acc.brand} size={14} />
                                   <div className="min-w-0">
                                     <div
-                                      className={`truncate font-medium ${
-                                        acc.inferred ? "text-[var(--fg-muted)]" : "text-[var(--fg)]"
+                                      className={`truncate text-[12px] ${
+                                        acc.inferred
+                                          ? "text-[var(--fg-muted)]"
+                                          : "font-medium text-[var(--fg)]"
                                       }`}
                                       title={acc.key ? `${acc.title} (${acc.key})` : acc.title}
                                     >
                                       {acc.inferred ? `~ ${acc.title}` : acc.title}
                                     </div>
                                     {acc.subtitle && (
-                                      <div className="truncate text-[10px] text-[var(--fg-subtle)]">
+                                      <div className="truncate text-[11px] text-[var(--fg-subtle)]">
                                         {acc.subtitle}
                                       </div>
                                     )}
@@ -205,37 +212,50 @@ export const LogsView: React.FC<LogsViewProps> = ({
                                 </div>
                               )}
                             </td>
-                            <td className="py-[var(--density-cell-y)] px-3 text-[11px] max-w-[250px]">
-                              <div className="truncate text-[var(--fg)]">{r.resolvedModel || r.model}</div>
+                            <td className="max-w-[170px]">
+                              <div className="truncate text-[11px] text-[var(--fg)]">
+                                {r.resolvedModel || r.model}
+                              </div>
                               {r.resolvedModel && r.resolvedModel !== r.model && (
-                                <div className="truncate text-[10px] text-[var(--fg-subtle)]">{r.model}</div>
+                                <div className="truncate text-[11px] text-[var(--fg-subtle)]">{r.model}</div>
                               )}
                             </td>
-                            <td className="py-[var(--density-cell-y)] px-3 text-[11px] text-[var(--fg-muted)] whitespace-nowrap">
+                            <td className="whitespace-nowrap text-[11px] text-[var(--fg-muted)]">
                               {r.effort || "—"}
                             </td>
-                            <td className="py-[var(--density-cell-y)] px-3 whitespace-nowrap">
-                              <Badge
-                                variant={r.status >= 200 && r.status < 400 ? "success" : "danger"}
-                                className="rounded-full px-2 text-[10px]"
+                            <td className="whitespace-nowrap">
+                              <span
+                                className={`inline-flex items-center gap-1.5 tabular-nums text-[11px] ${
+                                  ok ? "text-[var(--fg-muted)]" : "text-[var(--danger)]"
+                                }`}
                               >
+                                <span
+                                  className={`size-1.5 rounded-full ${
+                                    ok ? "bg-[var(--success)]" : "bg-[var(--danger)]"
+                                  }`}
+                                />
                                 {r.status}
-                              </Badge>
+                              </span>
                             </td>
-                            <td className="py-[var(--density-cell-y)] px-3 text-right tabular-nums text-[var(--fg-muted)] whitespace-nowrap">
-                              ↑ {r.inputTokens.toLocaleString()} · ↓ {r.outputTokens.toLocaleString()}
-                              {r.cacheReadTokens > 0 && ` · кеш ${r.cacheReadTokens.toLocaleString()}`}
+                            <td
+                              className="whitespace-nowrap text-right tabular-nums text-[11px] text-[var(--fg-muted)]"
+                              title={t("вход {input} · выход {output}{cache}", { input: r.inputTokens.toLocaleString(), output: r.outputTokens.toLocaleString(), cache: r.cacheReadTokens > 0 ? ` · ${t("кеш")} ${r.cacheReadTokens.toLocaleString()}` : "" })}
+                            >
+                              ↑{formatTokens(r.inputTokens)} ↓{formatTokens(r.outputTokens)}
+                              {r.cacheReadTokens > 0 && (
+                                <span className="text-[var(--fg-subtle)]"> · {t("кеш")} {formatTokens(r.cacheReadTokens)}</span>
+                              )}
                             </td>
-                            <td className="py-[var(--density-cell-y)] px-3 text-right tabular-nums text-[var(--fg-muted)] whitespace-nowrap">
-                              {r.latencyMs} мс
+                            <td className="whitespace-nowrap text-right tabular-nums text-[11px] text-[var(--fg-muted)]">
+                              {formatDuration(r.latencyMs)}
                             </td>
-                            <td className="py-[var(--density-cell-y)] px-3 text-right tabular-nums whitespace-nowrap">
+                            <td className="whitespace-nowrap text-right tabular-nums text-[11px]">
                               {r.costUsd > 0 ? (
                                 <span className="font-medium text-[var(--fg)]">${r.costUsd.toFixed(4)}</span>
                               ) : r.apiEquivalentUsd > 0 ? (
                                 <span
                                   className="text-[var(--fg-subtle)]"
-                                  title="Расчётный эквивалент стоимости API — реальное списание неизвестно"
+                                  title={t("Расчётный эквивалент стоимости API — реальное списание неизвестно")}
                                 >
                                   ~${r.apiEquivalentUsd.toFixed(4)}
                                 </span>
@@ -245,54 +265,73 @@ export const LogsView: React.FC<LogsViewProps> = ({
                             </td>
                           </tr>
                           {isExpanded && (
-                            <tr className="bg-[var(--bg)]">
-                              <td colSpan={9} className="p-3.5 space-y-2.5 text-[11px]">
-                                <div className="flex flex-wrap gap-x-5 gap-y-1.5 text-[var(--fg-muted)] tabular-nums">
-                                  <span>
-                                    Аккаунт:{" "}
-                                    <span className="font-medium text-[var(--fg)]">
-                                      {acc.title}
-                                      {r.backendKey ? ` (${r.backendKey})` : ""}
-                                    </span>
-                                  </span>
-                                  <span>
-                                    ID запроса: <code className="text-[var(--fg)]">{r.requestId}</code>
-                                  </span>
-                                  <span>
-                                    Запрошено: <code className="text-[var(--fg)]">{r.model}</code>
-                                  </span>
-                                  <span>
-                                    Исполнено:{" "}
-                                    <code className="text-[var(--fg)]">{r.resolvedModel || "—"}</code>
-                                  </span>
-                                  <span>Усилие: {r.effort || "—"}</span>
-                                  <span>Токены: {r.usageSource === "measured" ? "измерены" : "оценка"}</span>
-                                  <span>Списано: {r.costUsd > 0 ? `$${r.costUsd.toFixed(5)}` : "неизвестно"}</span>
-                                  <span title="Расчётный эквивалент стоимости публичного API">
-                                    Экв. API: ~${r.apiEquivalentUsd.toFixed(5)}
-                                  </span>
+                            <tr className="bg-[var(--bg-subtle)]/40">
+                              <td colSpan={9} className="p-4">
+                                <div className="space-y-3 text-[11px]">
+                                  <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 md:grid-cols-4">
+                                    <div>
+                                      <div className="text-[11px] text-[var(--fg-subtle)]">{t("Аккаунт")}</div>
+                                      <div className="truncate font-medium text-[var(--fg)]">
+                                        {acc.title}
+                                        {r.backendKey ? ` · ${r.backendKey}` : ""}
+                                      </div>
+                                    </div>
+                                    <div>
+                                      <div className="text-[11px] text-[var(--fg-subtle)]">{t("Запрошено")}</div>
+                                      <div className="truncate text-[var(--fg)]">{r.model}</div>
+                                    </div>
+                                    <div>
+                                      <div className="text-[11px] text-[var(--fg-subtle)]">{t("Исполнено")}</div>
+                                      <div className="truncate text-[var(--fg)]">{r.resolvedModel || "—"}</div>
+                                    </div>
+                                    <div>
+                                      <div className="text-[11px] text-[var(--fg-subtle)]">{t("Усилие")}</div>
+                                      <div className="text-[var(--fg)]">{r.effort || "—"}</div>
+                                    </div>
+                                    <div>
+                                      <div className="text-[11px] text-[var(--fg-subtle)]">{t("Токены")}</div>
+                                      <div className="text-[var(--fg)]">
+                                        {r.usageSource === "measured" ? t("измерены") : t("оценка")}
+                                      </div>
+                                    </div>
+                                    <div>
+                                      <div className="text-[11px] text-[var(--fg-subtle)]">{t("Списано")}</div>
+                                      <div className="text-[var(--fg)]">
+                                        {r.costUsd > 0 ? `$${r.costUsd.toFixed(5)}` : t("неизвестно")}
+                                      </div>
+                                    </div>
+                                    <div title={t("Расчётный эквивалент стоимости публичного API")}>
+                                      <div className="text-[11px] text-[var(--fg-subtle)]">{t("Эквивалент API")}</div>
+                                      <div className="text-[var(--fg)]">~${r.apiEquivalentUsd.toFixed(5)}</div>
+                                    </div>
+                                    <div>
+                                      <div className="text-[11px] text-[var(--fg-subtle)]">{t("ID запроса")}</div>
+                                      <div className="truncate text-[var(--fg-muted)]">{r.requestId}</div>
+                                    </div>
+                                  </div>
+
+                                  {r.error && (
+                                    <div className="rounded-[5px] border border-[var(--danger)]/30 bg-[var(--danger-soft)] p-2.5 text-[var(--danger)]">
+                                      {r.error}
+                                    </div>
+                                  )}
+                                  {r.promptPreview && (
+                                    <div>
+                                      <div className="mb-1 text-[11px] text-[var(--fg-subtle)]">{t("Запрос")}</div>
+                                      <pre className="whitespace-pre-wrap rounded-[5px] bg-[var(--bg-elevated)] p-2.5 text-[var(--fg)]">
+                                        {r.promptPreview}
+                                      </pre>
+                                    </div>
+                                  )}
+                                  {r.responsePreview && (
+                                    <div>
+                                      <div className="mb-1 text-[11px] text-[var(--fg-subtle)]">{t("Ответ")}</div>
+                                      <pre className="whitespace-pre-wrap rounded-[5px] bg-[var(--bg-elevated)] p-2.5 text-[var(--fg)]">
+                                        {r.responsePreview}
+                                      </pre>
+                                    </div>
+                                  )}
                                 </div>
-                                {r.error && (
-                                  <div className="rounded-[7px] border border-[var(--danger)]/35 bg-[var(--danger-soft)] p-2.5 text-[var(--danger)]">
-                                    {r.error}
-                                  </div>
-                                )}
-                                {r.promptPreview && (
-                                  <div>
-                                    <div className="font-medium text-[var(--fg-muted)] mb-1">Запрос</div>
-                                    <pre className="rounded-[7px] border bg-[var(--bg-elevated)] p-2.5 whitespace-pre-wrap text-[var(--fg)]">
-                                      {r.promptPreview}
-                                    </pre>
-                                  </div>
-                                )}
-                                {r.responsePreview && (
-                                  <div>
-                                    <div className="font-medium text-[var(--fg-muted)] mb-1">Ответ</div>
-                                    <pre className="rounded-[7px] border bg-[var(--bg-elevated)] p-2.5 whitespace-pre-wrap text-[var(--fg)]">
-                                      {r.responsePreview}
-                                    </pre>
-                                  </div>
-                                )}
                               </td>
                             </tr>
                           )}
@@ -305,35 +344,28 @@ export const LogsView: React.FC<LogsViewProps> = ({
             </div>
           </Panel>
         ) : (
-          <Panel className="max-w-7xl mx-auto divide-y text-[11px] overflow-hidden">
+          <Panel className="mx-auto max-w-7xl overflow-hidden">
             {appLogs.length === 0 ? (
-              <div className="p-10 text-center font-sans text-xs text-[var(--fg-muted)]">
-                Системные логи пусты.
+              <div className="p-10 text-center text-[12px] text-[var(--fg-muted)]">
+                {t("Системные логи пусты.")}
               </div>
             ) : (
-              appLogs.map((l) => (
-                <div key={l.id} className="flex items-start gap-3 px-3.5 py-2 hover:bg-[var(--bg-subtle)]/40">
-                  <span className="text-[var(--fg-subtle)] tabular-nums shrink-0">
-                    {new Date(l.createdAt).toLocaleTimeString()}
-                  </span>
-                  <Badge
-                    variant={
-                      l.level === "error"
-                        ? "danger"
-                        : l.level === "warn"
-                          ? "warning"
-                          : l.level === "debug"
-                            ? "neutral"
-                            : "accent"
-                    }
-                    className="w-12 justify-center font-sans text-[10px] shrink-0"
-                  >
-                    {l.level}
-                  </Badge>
-                  <span className="text-[var(--fg-muted)] shrink-0">[{l.source}]</span>
-                  <span className="text-[var(--fg)] break-all">{l.message}</span>
-                </div>
-              ))
+              <div className="divide-y">
+                {appLogs.map((l) => (
+                  <div key={l.id} className="flex items-start gap-3 px-3.5 py-1.5 text-[11px] hover:bg-[var(--bg-subtle)]">
+                    <span className="shrink-0 tabular-nums text-[var(--fg-subtle)]">
+                      {new Date(l.createdAt).toLocaleTimeString(lang === "ru" ? "ru-RU" : "en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                    </span>
+                    <span
+                      className={`w-10 shrink-0 font-medium ${LEVEL_COLOR[l.level] ?? "text-[var(--fg-muted)]"}`}
+                    >
+                      {l.level}
+                    </span>
+                    <span className="shrink-0 text-[var(--fg-subtle)]">{l.source}</span>
+                    <span className="break-all text-[var(--fg)]">{l.message}</span>
+                  </div>
+                ))}
+              </div>
             )}
           </Panel>
         )}

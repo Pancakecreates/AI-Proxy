@@ -3,8 +3,10 @@ mod codex_client;
 mod commands;
 mod db;
 mod discovery;
+mod external_client;
 mod http_server;
 mod models;
+mod net;
 mod pricing;
 mod quota;
 mod router;
@@ -345,6 +347,8 @@ pub fn run() {
             commands::hide_main_window,
             commands::show_main_window,
             commands::quit_app,
+            commands::test_external_provider,
+            commands::test_proxy_connection,
             commands::check_app_update,
             commands::download_and_launch_update,
         ])

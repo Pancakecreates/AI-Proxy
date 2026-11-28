@@ -17,10 +17,7 @@ export function Segmented<T extends string>({ value, onChange, options, classNam
   return (
     <div
       role="tablist"
-      className={cn(
-        "inline-flex items-center gap-0.5 rounded-[8px] border border-[var(--border)] bg-[var(--bg)] p-0.5",
-        className,
-      )}
+      className={cn("inline-flex items-center gap-0.5 rounded-[6px] bg-[var(--bg-subtle)] p-0.5", className)}
     >
       {options.map((opt) => {
         const active = opt.value === value;
@@ -32,9 +29,9 @@ export function Segmented<T extends string>({ value, onChange, options, classNam
             aria-selected={active}
             onClick={() => onChange(opt.value)}
             className={cn(
-              "inline-flex h-7 items-center gap-1.5 rounded-[6px] px-2.5 text-xs font-medium transition-colors duration-150 tabular-nums",
+              "inline-flex h-6 items-center gap-1.5 rounded-[5px] px-2 text-[12px] font-medium transition-colors duration-100 tabular-nums",
               active
-                ? "bg-[var(--bg-subtle)] text-[var(--fg)] shadow-[var(--panel-highlight)]"
+                ? "bg-[var(--bg-elevated)] text-[var(--fg)] shadow-[var(--shadow-raised)]"
                 : "text-[var(--fg-muted)] hover:text-[var(--fg)]",
             )}
           >

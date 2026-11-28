@@ -7,7 +7,7 @@ export const Input = React.forwardRef<HTMLInputElement, React.InputHTMLAttribute
     <input
       ref={ref}
       className={cn(
-        "h-8 w-full rounded-[7px] border border-[var(--border)] bg-[var(--bg)] px-2.5 text-xs text-[var(--fg)] placeholder:text-[var(--fg-subtle)] transition-colors hover:border-[var(--border-strong)] disabled:opacity-50",
+        "h-7.5 w-full rounded-[6px] border border-transparent bg-[var(--bg-subtle)] px-2.5 text-[12px] text-[var(--fg)] placeholder:text-[var(--fg-subtle)] transition-colors hover:bg-[var(--bg-hover)] focus:border-[var(--border-strong)] focus:bg-[var(--bg-elevated)] disabled:opacity-50",
         className,
       )}
       {...props}
@@ -33,7 +33,7 @@ export const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(({ 
   <textarea
     ref={ref}
     className={cn(
-      "w-full rounded-[8px] border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-xs text-[var(--fg)] placeholder:text-[var(--fg-subtle)] transition-colors hover:border-[var(--border-strong)] disabled:opacity-50",
+      "w-full rounded-[6px] border border-transparent bg-[var(--bg-subtle)] px-2.5 py-2 text-[12px] leading-relaxed text-[var(--fg)] placeholder:text-[var(--fg-subtle)] transition-colors hover:bg-[var(--bg-hover)] focus:border-[var(--border-strong)] focus:bg-[var(--bg-elevated)] disabled:opacity-50",
       className,
     )}
     {...props}

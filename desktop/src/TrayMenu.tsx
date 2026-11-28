@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ExternalLink, Power, RotateCw } from "lucide-react";
 import { Switch } from "./components/ui/Switch";
+import { I18nProvider, useI18n } from "./i18n";
 import type { AppSettings, ProxyRuntimeStatus } from "./types";
 
 function applyThemeAttrs(s: AppSettings) {
@@ -20,7 +21,8 @@ function applyThemeAttrs(s: AppSettings) {
   document.body.style.background = "transparent";
 }
 
-export const TrayMenu: React.FC = () => {
+const TrayMenuInner: React.FC = () => {
+  const { t } = useI18n();
   const [status, setStatus] = useState<ProxyRuntimeStatus | null>(null);
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [busy, setBusy] = useState(false);
@@ -106,36 +108,26 @@ export const TrayMenu: React.FC = () => {
 
   return (
     <div className="h-dvh w-screen p-1.5 select-none bg-transparent">
-      <div className="h-full w-full rounded-[12px] border border-[var(--border-strong)] bg-[var(--bg-elevated)] shadow-[0_10px_28px_rgba(0,0,0,0.42)] flex flex-col overflow-hidden">
-        <div className="px-3 py-2.5 border-b bg-[var(--sidebar-bg)] flex items-center justify-between gap-2">
+      <div className="h-full w-full rounded-[8px] border border-[var(--border-strong)] bg-[var(--bg-elevated)] shadow-[0_10px_28px_rgba(0,0,0,0.42)] flex flex-col overflow-hidden">
+        <div className="px-3 py-2 border-b bg-[var(--sidebar-bg)] flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 min-w-0">
-            <div className="flex size-5 shrink-0 items-center justify-center rounded-[6px] bg-[var(--bg-subtle)] border border-[var(--border-strong)]">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path
-                  d="M6 7L18 12L6 17"
-                  stroke="var(--accent)"
-                  strokeWidth="2.4"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-                <circle cx="6" cy="7" r="2.3" fill="var(--fg)" />
-                <circle cx="6" cy="17" r="2.3" fill="var(--fg)" />
-                <circle cx="18" cy="12" r="2.6" fill="var(--accent)" />
-              </svg>
-            </div>
-            <span className="text-[12.5px] font-semibold tracking-[-0.015em] text-[var(--fg)] truncate">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true" className="shrink-0">
+              <path
+                d="M5.5 7.5L18 12L5.5 16.5"
+                stroke="var(--accent)"
+                strokeWidth="1.7"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+              <circle cx="5.5" cy="7.5" r="2.1" fill="var(--fg-muted)" />
+              <circle cx="5.5" cy="16.5" r="2.1" fill="var(--fg-muted)" />
+              <circle cx="18" cy="12" r="2.4" fill="var(--accent)" />
+            </svg>
+            <span className="text-[12px] font-semibold tracking-[-0.01em] text-[var(--fg)] truncate">
               AI Proxy
             </span>
           </div>
-          <span
-            className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10.5px] font-medium tabular-nums ${
-              starting
-                ? "bg-[var(--warning-soft)] text-[var(--warning)]"
-                : running
-                  ? "bg-[var(--success-soft)] text-[var(--success)]"
-                  : "bg-[var(--bg-subtle)] text-[var(--fg-muted)]"
-            }`}
-          >
+          <span className="inline-flex items-center gap-1.5 text-[11px] font-medium tabular-nums text-[var(--fg-muted)]">
             <span
               className={`size-1.5 rounded-full ${
                 starting
@@ -145,12 +137,12 @@ export const TrayMenu: React.FC = () => {
                     : "bg-[var(--fg-subtle)]"
               }`}
             />
-            {starting ? "Запуск" : running ? `${status?.modelsCount ?? 0} мод.` : "Остановлен"}
+            {starting ? t("Запуск") : running ? t("{count} мод.", { count: status?.modelsCount ?? 0 }) : t("Остановлен")}
           </span>
         </div>
 
         {settings && (
-          <div className="px-3 py-1.5 border-b bg-[var(--bg)]/60 flex items-center gap-2 text-[10.5px] text-[var(--fg-muted)] tabular-nums">
+          <div className="px-3 py-1.5 border-b bg-[var(--bg)]/60 flex items-center gap-2 text-[11px] text-[var(--fg-muted)] tabular-nums">
             <span className="inline-flex items-center gap-1">
               <span
                 className={`size-1.5 rounded-full ${
@@ -176,14 +168,14 @@ export const TrayMenu: React.FC = () => {
             <button
               type="button"
               onClick={handleOpen}
-              className="w-full flex items-center gap-2.5 rounded-[7px] px-2.5 py-1.5 text-xs font-medium text-[var(--fg)] hover:bg-[var(--bg-subtle)] transition-colors text-left"
+              className="w-full flex items-center gap-2.5 rounded-[5px] px-2 py-1.5 text-[12px] font-medium text-[var(--fg)] hover:bg-[var(--bg-subtle)] transition-colors text-left"
             >
               <ExternalLink className="size-3.5 text-[var(--fg-muted)] shrink-0" />
-              <span>Открыть окно</span>
+              <span>{t("Открыть окно")}</span>
             </button>
 
-            <div className="flex items-center justify-between gap-2 rounded-[7px] px-2.5 py-1.5">
-              <span className="text-xs font-medium text-[var(--fg)]">Прокси</span>
+            <div className="flex items-center justify-between gap-2 rounded-[5px] px-2 py-1.5">
+              <span className="text-[12px] font-medium text-[var(--fg)]">{t("Прокси")}</span>
               <Switch
                 checked={running}
                 disabled={busy || starting}
@@ -196,10 +188,10 @@ export const TrayMenu: React.FC = () => {
                 type="button"
                 onClick={handleRestart}
                 disabled={busy || starting}
-                className="w-full flex items-center gap-2.5 rounded-[7px] px-2.5 py-1.5 text-xs font-medium text-[var(--fg-muted)] hover:bg-[var(--bg-subtle)] hover:text-[var(--fg)] disabled:opacity-50 transition-colors text-left"
+                className="w-full flex items-center gap-2.5 rounded-[5px] px-2 py-1.5 text-[12px] font-medium text-[var(--fg-muted)] hover:bg-[var(--bg-subtle)] hover:text-[var(--fg)] disabled:opacity-50 transition-colors text-left"
               >
                 <RotateCw className="size-3.5 shrink-0" />
-                <span>Перезапустить</span>
+                <span>{t("Перезапустить")}</span>
               </button>
             )}
           </div>
@@ -208,14 +200,34 @@ export const TrayMenu: React.FC = () => {
             <button
               type="button"
               onClick={handleQuit}
-              className="w-full flex items-center gap-2.5 rounded-[7px] px-2.5 py-1.5 text-xs font-medium text-[var(--danger)] hover:bg-[var(--danger-soft)] transition-colors text-left"
+              className="w-full flex items-center gap-2.5 rounded-[5px] px-2 py-1.5 text-[12px] font-medium text-[var(--danger)] hover:bg-[var(--danger-soft)] transition-colors text-left"
             >
               <Power className="size-3.5 shrink-0" />
-              <span>Выход</span>
+              <span>{t("Выход")}</span>
             </button>
           </div>
         </div>
       </div>
     </div>
+  );
+};
+
+export const TrayMenu: React.FC = () => {
+  const [language, setLanguage] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    invoke<{ language?: string }>("get_settings")
+      .then((s) => setLanguage(s.language))
+      .catch(() => {});
+    const u = listen<{ language?: string }>("settings-updated", (ev) => {
+      if (ev.payload) setLanguage(ev.payload.language);
+    });
+    return () => {
+      u.then((f) => f()).catch(() => {});
+    };
+  }, []);
+  return (
+    <I18nProvider languageSetting={language}>
+      <TrayMenuInner />
+    </I18nProvider>
   );
 };

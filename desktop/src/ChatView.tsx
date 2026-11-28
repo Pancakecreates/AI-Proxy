@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
   Plus,
-  Send,
+  ArrowUp,
   Square,
   Trash2,
   ChevronDown,
@@ -15,7 +15,9 @@ import type { BackendModelEntry, ChatMessageRecord, ChatSummary } from "./types"
 import { BrandIcon } from "./BrandIcon";
 import { Select } from "./Select";
 import { Button, Textarea } from "./components/ui";
+import { formatDuration, formatTokens } from "./format";
 
+import { useI18n } from "./i18n";
 interface ChatViewProps {
   models: BackendModelEntry[];
   defaultModel: string;
@@ -29,6 +31,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   showThinking,
   preselectedModelId,
 }) => {
+  const { t, lang } = useI18n();
   const [chats, setChats] = useState<ChatSummary[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessageRecord[]>([]);
@@ -101,7 +104,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const handleNewChat = async () => {
     const picked = modelId || models[0]?.qualifiedId || defaultModel;
     const created = await invoke<ChatSummary>("create_chat", {
-      title: `Тест · ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`,
+      title: `${t("Тест")} · ${new Date().toLocaleTimeString(lang === "ru" ? "ru-RU" : "en-US", { hour: "2-digit", minute: "2-digit" })}`,
       modelId: picked,
       protocol,
       effort,
@@ -204,18 +207,24 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
   return (
     <div className="flex h-full overflow-hidden">
-      <aside className="w-60 shrink-0 border-r bg-[var(--sidebar-bg)] flex flex-col">
-        <div className="p-3 border-b flex items-center justify-between">
-          <span className="text-xs font-semibold text-[var(--fg-muted)]">Локальные чаты</span>
-          <Button variant="primary" size="xs" onClick={handleNewChat}>
+      <aside className="flex w-56 shrink-0 flex-col border-r bg-[var(--sidebar-bg)]">
+        <div className="flex h-11 items-center justify-between border-b px-2.5">
+          <span className="text-[11px] font-medium text-[var(--fg-subtle)]">{t("Чаты")}</span>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={handleNewChat}
+            title={t("Новый чат")}
+            aria-label={t("Новый чат")}
+            className="size-6.5"
+          >
             <Plus className="size-3.5" />
-            <span>Новый</span>
           </Button>
         </div>
-        <div className="flex-1 overflow-y-auto p-1.5 space-y-0.5">
+        <div className="flex-1 space-y-px overflow-y-auto p-1.5">
           {chats.length === 0 ? (
-            <div className="p-4 text-center text-[11px] text-[var(--fg-subtle)]">
-              Нет сохранённых чатов. Напишите сообщение или нажмите «Новый».
+            <div className="px-2 py-6 text-center text-[11px] leading-relaxed text-[var(--fg-subtle)]">
+              {t("Нет сохранённых чатов. Напишите сообщение или нажмите «+».")}
             </div>
           ) : (
             chats.map((c) => {
@@ -224,20 +233,21 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 <div
                   key={c.id}
                   onClick={() => setActiveChatId(c.id)}
-                  className={`group flex items-center justify-between gap-2 rounded-[7px] px-2.5 py-1.5 text-xs cursor-pointer transition-colors ${
+                  className={`group flex cursor-pointer items-center justify-between gap-2 rounded-[6px] px-2 py-1.5 transition-colors ${
                     active
-                      ? "bg-[var(--bg-subtle)] text-[var(--fg)] font-medium shadow-[var(--panel-highlight)]"
-                      : "text-[var(--fg-muted)] hover:bg-[var(--bg-subtle)]/55 hover:text-[var(--fg)]"
+                      ? "bg-[var(--control-active)] text-[var(--fg)] shadow-[inset_0_0_0_1px_var(--border)]"
+                      : "text-[var(--fg-muted)] hover:bg-[var(--bg-subtle)] hover:text-[var(--fg)]"
                   }`}
                 >
-                  <div className="flex items-center gap-2 min-w-0">
+                  <div className="flex min-w-0 items-center gap-2">
                     <MessageSquare
                       className={`size-3.5 shrink-0 ${active ? "text-[var(--accent)]" : "text-[var(--fg-subtle)]"}`}
+                      strokeWidth={1.8}
                     />
                     <div className="min-w-0">
-                      <div className="truncate">{c.title}</div>
-                      <div className="text-[10px] text-[var(--fg-subtle)] truncate tabular-nums">
-                        {c.messageCount} сообщ.
+                      <div className="truncate text-[12px]">{c.title}</div>
+                      <div className="truncate text-[11px] tabular-nums text-[var(--fg-subtle)]">
+                        {t("{count} сообщ.", { count: c.messageCount })}
                       </div>
                     </div>
                   </div>
@@ -247,8 +257,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
                       e.stopPropagation();
                       handleDeleteChat(c.id);
                     }}
-                    aria-label="Удалить чат"
-                    className="opacity-0 group-hover:opacity-100 text-[var(--fg-subtle)] hover:text-[var(--danger)] p-0.5 transition-opacity"
+                    aria-label={t("Удалить чат")}
+                    className="p-0.5 text-[var(--fg-subtle)] opacity-0 transition-opacity hover:text-[var(--danger)] group-hover:opacity-100"
                   >
                     <Trash2 className="size-3" />
                   </button>
@@ -259,45 +269,48 @@ export const ChatView: React.FC<ChatViewProps> = ({
         </div>
       </aside>
 
-      <div className="flex-1 flex flex-col min-w-0 bg-[var(--bg)]">
-        <div className="border-b bg-[var(--bg-elevated)] px-4 py-2.5 flex flex-wrap items-center gap-2">
-          <div className="flex items-center gap-2 flex-1 min-w-[240px]">
-            <BrandIcon brand={selectedModelMeta?.brand ?? "devin"} size={18} />
-            <Select
-              value={modelId}
-              onChange={setModelId}
-              searchable
-              searchPlaceholder="Поиск модели..."
-              ariaLabel="Модель"
-              placeholder="Выберите модель…"
-              className="flex-1 min-w-0"
-              options={
-                models.length === 0
-                  ? [{ value: modelId, label: modelId }]
-                  : models.map((m) => ({
-                      value: m.qualifiedId,
-                      label: m.displayName,
-                      hint: m.description,
-                    }))
-              }
-            />
-          </div>
+      <div className="flex min-w-0 flex-1 flex-col bg-[var(--bg)]">
+        <div className="flex h-11 flex-wrap items-center gap-1.5 border-b px-3">
+          <BrandIcon brand={selectedModelMeta?.brand ?? "devin"} size={16} />
+          <Select
+            value={modelId}
+            onChange={setModelId}
+            searchable
+            searchPlaceholder={t("Поиск модели…")}
+            ariaLabel={t("Модель")}
+            placeholder={t("Выберите модель…")}
+            className="min-w-0 flex-1"
+            options={
+              models.length === 0
+                ? [{ value: modelId, label: modelId }]
+                : models.map((m) => ({
+                    value: m.qualifiedId,
+                    label: m.displayName,
+                    hint: m.description,
+                  }))
+            }
+          />
 
           <Select
             value={effort}
             onChange={setEffort}
-            ariaLabel="Уровень мышления"
-            className="w-36"
-            options={["none", "minimal", "low", "medium", "high", "xhigh", "max"].map((lvl) => ({
-              value: lvl,
-              label: `Effort: ${lvl}`,
-            }))}
+            ariaLabel={t("Усилие")}
+            className="w-40"
+            options={[
+              { value: "none", label: t("Выкл") },
+              { value: "minimal", label: t("Минимальное") },
+              { value: "low", label: t("Низкое") },
+              { value: "medium", label: t("Среднее") },
+              { value: "high", label: t("Высокое") },
+              { value: "xhigh", label: t("Очень высокое") },
+              { value: "max", label: t("Максимум") },
+            ]}
           />
 
           <Select
             value={protocol}
             onChange={setProtocol}
-            ariaLabel="Протокол"
+            ariaLabel={t("Протокол")}
             className="w-28"
             options={[
               { value: "anthropic", label: "Anthropic" },
@@ -306,130 +319,155 @@ export const ChatView: React.FC<ChatViewProps> = ({
           />
 
           <Button
-            variant={showSystem ? "primary" : "secondary"}
-            size="sm"
+            variant={showSystem ? "secondary" : "ghost"}
+            size="icon"
             onClick={() => setShowSystem((v) => !v)}
+            title={t("Системный промпт")}
+            aria-label={t("Системный промпт")}
+            className="size-7"
           >
             <SlidersHorizontal className="size-3.5" />
-            <span>System</span>
           </Button>
         </div>
 
         {showSystem && (
-          <div className="border-b bg-[var(--bg-subtle)]/55 px-4 py-2.5">
+          <div className="border-b bg-[var(--bg-subtle)] px-3 py-2">
             <Textarea
               value={systemPrompt}
               onChange={(e) => setSystemPrompt(e.target.value)}
-              placeholder="Системные инструкции для этого тестового чата..."
+              placeholder={t("Системные инструкции для этого тестового чата…")}
               rows={2}
+              className="bg-[var(--bg-elevated)] text-[12px]"
             />
           </div>
         )}
 
-        <div ref={scrollRef} className="flex-1 overflow-y-auto p-5 space-y-4">
-          {messages.length === 0 && !sending && (
-            <div className="h-full flex flex-col items-center justify-center text-center max-w-md mx-auto gap-2.5 text-[var(--fg-muted)]">
-              <BrandIcon brand={selectedModelMeta?.brand ?? "claude"} size={30} />
-              <div className="text-sm font-medium text-[var(--fg)]">Песочница проверки моделей</div>
-              <p className="text-xs text-pretty">
-                Все сообщения сохраняются в локальную базу SQLite, а ответы измеряются по токенам, задержке и стоимости.
-              </p>
-            </div>
-          )}
+        <div ref={scrollRef} className="flex-1 overflow-y-auto">
+          <div className="mx-auto max-w-3xl space-y-5 px-6 py-5">
+            {messages.length === 0 && !sending && (
+              <div className="flex h-[60vh] flex-col items-center justify-center gap-2 text-center">
+                <BrandIcon brand={selectedModelMeta?.brand ?? "claude"} size={28} />
+                <div className="text-[13px] font-medium text-[var(--fg)]">{t("Песочница моделей")}</div>
+                <p className="max-w-xs text-[12px] leading-relaxed text-[var(--fg-muted)] text-pretty">
+                  {t("Сообщения сохраняются в локальную SQLite, ответы измеряются по токенам, задержке и стоимости.")}
+                </p>
+              </div>
+            )}
 
-          {messages.map((m) => {
-            const isUser = m.role === "user";
-            const thinkOpen = openThinkIds[m.id] ?? showThinking;
-            return (
-              <div key={m.id} className={`flex flex-col ${isUser ? "items-end" : "items-start"}`}>
-                <div
-                  className={`max-w-[82%] rounded-[10px] px-3.5 py-2.5 text-sm leading-relaxed ${
-                    isUser
-                      ? "bg-[var(--accent)] text-[var(--accent-fg)]"
-                      : "surface-panel text-[var(--fg)]"
-                  }`}
-                >
-                  {!isUser && m.thinking && (
-                    <div className="mb-2 border-b pb-2">
+            {messages.map((m) => {
+              const isUser = m.role === "user";
+              const thinkOpen = openThinkIds[m.id] ?? showThinking;
+              if (isUser) {
+                return (
+                  <div key={m.id} className="flex justify-end">
+                    <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-[8px] bg-[var(--bg-subtle)] px-3.5 py-2.5 text-[13px] leading-relaxed text-[var(--fg)]">
+                      {m.content}
+                    </div>
+                  </div>
+                );
+              }
+              return (
+                <div key={m.id} className="space-y-1.5">
+                  <div className="flex items-center gap-1.5 text-[11px] text-[var(--fg-subtle)]">
+                    <BrandIcon brand={selectedModelMeta?.brand ?? "claude"} size={12} />
+                    <span className="truncate">{m.modelId}</span>
+                  </div>
+                  {m.thinking && (
+                    <div>
                       <button
                         type="button"
                         onClick={() => setOpenThinkIds((p) => ({ ...p, [m.id]: !thinkOpen }))}
-                        className="inline-flex items-center gap-1 text-[11px] font-medium text-[var(--fg-muted)] hover:text-[var(--fg)]"
+                        className="inline-flex items-center gap-1 text-[11px] text-[var(--fg-subtle)] transition-colors hover:text-[var(--fg-muted)]"
                       >
                         {thinkOpen ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
-                        <span>Ход мыслей</span>
+                        <span>{t("Ход мыслей")}</span>
                       </button>
                       {thinkOpen && (
-                        <pre className="mt-1.5 whitespace-pre-wrap text-[11px] text-[var(--fg-muted)] leading-snug">
+                        <pre className="mt-1 whitespace-pre-wrap rounded-[6px] bg-[var(--bg-subtle)] p-3 text-[11px] leading-relaxed text-[var(--fg-muted)]">
                           {m.thinking}
                         </pre>
                       )}
                     </div>
                   )}
-                  <div className="whitespace-pre-wrap break-words text-pretty">{m.content}</div>
-                </div>
-                {!isUser && (
-                  <div className="mt-1 flex items-center gap-2 text-[10px] text-[var(--fg-subtle)] tabular-nums px-1">
-                    <span>{m.modelId}</span>
-                    <span>
-                      · {m.inputTokens} вх. · {m.outputTokens} исх. ({m.usageSource === "measured" ? "точно" : "оценка"})
-                    </span>
-                    <span>· {m.latencyMs} мс</span>
-                    {m.costUsd > 0 && <span>· ${m.costUsd.toFixed(4)}</span>}
+                  <div className="whitespace-pre-wrap break-words text-[13px] leading-relaxed text-[var(--fg)] text-pretty">
+                    {m.content}
                   </div>
-                )}
-              </div>
-            );
-          })}
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] tabular-nums text-[var(--fg-subtle)]">
+                    <span>{formatTokens(m.inputTokens)} {t("вх.")}</span>
+                    <span>{formatTokens(m.outputTokens)} {t("исх.")}</span>
+                    <span>{m.usageSource === "measured" ? t("точно") : t("оценка")}</span>
+                    <span>{formatDuration(m.latencyMs)}</span>
+                    {m.costUsd > 0 && <span>${m.costUsd.toFixed(4)}</span>}
+                  </div>
+                </div>
+              );
+            })}
 
-          {sending && (
-            <div className="flex flex-col items-start">
-              <div className="max-w-[82%] rounded-[10px] surface-panel px-3.5 py-2.5 text-sm">
+            {sending && (
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-1.5 text-[11px] text-[var(--fg-subtle)]">
+                  <BrandIcon brand={selectedModelMeta?.brand ?? "claude"} size={12} />
+                  <span className="truncate">{modelId}</span>
+                </div>
                 {streamThinking && showThinking && (
-                  <pre className="mb-2 border-b pb-2 whitespace-pre-wrap text-[11px] text-[var(--fg-muted)]">
+                  <pre className="whitespace-pre-wrap rounded-[6px] bg-[var(--bg-subtle)] p-3 text-[11px] leading-relaxed text-[var(--fg-muted)]">
                     {streamThinking}
                   </pre>
                 )}
-                <div className="whitespace-pre-wrap break-words">
-                  {streamText || <span className="text-xs text-[var(--fg-subtle)]">Ожидание ответа модели...</span>}
+                <div className="whitespace-pre-wrap break-words text-[13px] leading-relaxed text-[var(--fg)]">
+                  {streamText || <span className="text-[var(--fg-subtle)]">{t("Ожидание ответа модели…")}</span>}
                 </div>
               </div>
-            </div>
-          )}
+            )}
 
-          {error && (
-            <div className="rounded-[8px] border border-[var(--danger)]/35 bg-[var(--danger-soft)] px-3 py-2 text-xs text-[var(--danger)]">
-              {error}
-            </div>
-          )}
+            {error && (
+              <div className="rounded-[6px] border border-[var(--danger)]/30 bg-[var(--danger-soft)] px-3 py-2 text-[12px] text-[var(--danger)]">
+                {error}
+              </div>
+            )}
+          </div>
         </div>
 
-        <div className="border-t bg-[var(--bg-elevated)] p-3">
-          <div className="flex items-end gap-2">
-            <Textarea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  handleSend();
-                }
-              }}
-              placeholder="Напишите тестовый запрос... (Enter отправить, Shift+Enter перенос)"
-              rows={2}
-              className="flex-1 resize-none text-sm"
-            />
-            {sending ? (
-              <Button variant="danger" size="md" onClick={handleStop} className="h-10 bg-[var(--danger)] text-white border-transparent hover:brightness-110">
-                <Square className="size-3.5 fill-current" />
-                <span>Стоп</span>
-              </Button>
-            ) : (
-              <Button variant="primary" size="md" onClick={handleSend} disabled={!input.trim()} className="h-10">
-                <Send className="size-3.5" />
-                <span>Отправить</span>
-              </Button>
-            )}
+        <div className="border-t px-4 py-3">
+          <div className="mx-auto max-w-3xl">
+            <div className="rounded-[8px] border bg-[var(--bg-elevated)] shadow-[var(--shadow-raised)] transition-colors focus-within:border-[var(--border-strong)]">
+              <Textarea
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSend();
+                  }
+                }}
+                placeholder={t("Напишите запрос…")}
+                rows={2}
+                className="resize-none rounded-[8px] border-transparent bg-transparent px-3 py-2.5 text-[13px] hover:bg-transparent focus:border-transparent focus:bg-transparent"
+              />
+              <div className="flex items-center justify-between gap-2 px-2 pb-2 pl-3">
+                <span className="text-[11px] text-[var(--fg-subtle)]">
+                  {t("Enter отправит, Shift+Enter перенесёт строку")}
+                </span>
+                {sending ? (
+                  <Button variant="secondary" size="sm" onClick={handleStop}>
+                    <Square className="size-2.5 fill-current" />
+                    <span>{t("Остановить")}</span>
+                  </Button>
+                ) : (
+                  <Button
+                    variant="primary"
+                    size="icon"
+                    onClick={handleSend}
+                    disabled={!input.trim()}
+                    title={t("Отправить")}
+                    aria-label={t("Отправить")}
+                    className="size-7 rounded-[6px]"
+                  >
+                    <ArrowUp className="size-3.5" />
+                  </Button>
+                )}
+              </div>
+            </div>
           </div>
         </div>
       </div>

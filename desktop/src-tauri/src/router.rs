@@ -1,5 +1,6 @@
 use crate::acp_client::{AcpBackend, AcpEndpointConfig, LogFn, StreamSink};
 use crate::codex_client::CodexBackend;
+use crate::external_client::ExternalBackend;
 use crate::discovery::{merge_antigravity_accounts, resolve_runtime_executable};
 use crate::models::{
     assign_unique_display_names, decode_gateway_model_id, peel_effort_and_speed_suffixes,
@@ -17,6 +18,7 @@ use tokio::sync::{Mutex, Notify, RwLock};
 pub enum BackendInstance {
     Acp(Arc<AcpBackend>),
     Codex(Arc<CodexBackend>),
+    External(Arc<ExternalBackend>),
 }
 
 impl BackendInstance {
@@ -24,6 +26,7 @@ impl BackendInstance {
         match self {
             Self::Acp(a) => &a.cfg.key,
             Self::Codex(_) => "codex",
+            Self::External(e) => &e.key,
         }
     }
 
@@ -31,6 +34,7 @@ impl BackendInstance {
         match self {
             Self::Acp(a) => a.cfg.kind,
             Self::Codex(_) => BackendKind::Codex,
+            Self::External(_) => BackendKind::External,
         }
     }
 
@@ -38,6 +42,7 @@ impl BackendInstance {
         match self {
             Self::Acp(a) => &a.cfg.label,
             Self::Codex(_) => "Codex",
+            Self::External(e) => &e.cfg.display_name,
         }
     }
 
@@ -45,6 +50,7 @@ impl BackendInstance {
         match self {
             Self::Acp(a) => a.warm_up(force).await.map(|v| v.len()),
             Self::Codex(c) => c.warm_up(force).await.map(|v| v.len()),
+            Self::External(e) => e.warm_up(force).await.map(|v| v.len()),
         }
     }
 
@@ -52,6 +58,7 @@ impl BackendInstance {
         match self {
             Self::Acp(a) => a.list_models().await,
             Self::Codex(c) => c.list_models().await,
+            Self::External(e) => e.list_models().await,
         }
     }
 
@@ -59,6 +66,7 @@ impl BackendInstance {
         match self {
             Self::Acp(a) => a.get_status().await,
             Self::Codex(c) => c.get_status().await,
+            Self::External(e) => e.get_status().await,
         }
     }
 
@@ -72,6 +80,7 @@ impl BackendInstance {
         match self {
             Self::Acp(a) => a.run_turn(native_model_id, req, sink, cancel).await,
             Self::Codex(c) => c.run_turn(native_model_id, req, sink, cancel).await,
+            Self::External(e) => e.run_turn(native_model_id, req, sink, cancel).await,
         }
     }
 
@@ -79,6 +88,7 @@ impl BackendInstance {
         match self {
             Self::Acp(a) => a.shutdown().await,
             Self::Codex(c) => c.shutdown().await,
+            Self::External(e) => e.shutdown().await,
         }
     }
 }
@@ -470,6 +480,18 @@ impl BackendRouter {
                     opencode_filter: None,
                     discovery_cwd: custom.cwd.filter(|c| !c.trim().is_empty()),
                 },
+                self.settings.clone(),
+                self.log.clone(),
+            )));
+        }
+
+        for ext in s.external_providers.into_iter().filter(|e| {
+            e.enabled
+                && !e.base_url.trim().is_empty()
+                && e.api_key.as_deref().map(str::trim).is_some_and(|k| !k.is_empty())
+        }) {
+            next.push(BackendInstance::External(ExternalBackend::new(
+                ext,
                 self.settings.clone(),
                 self.log.clone(),
             )));

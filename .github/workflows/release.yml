@@ -9,7 +9,7 @@ on:
         default: "0.2.0"
         type: string
       notes:
-        description: "Additional release notes"
+        description: "Additional release notes (write in English)"
         required: false
         default: ""
         type: string
@@ -59,14 +59,14 @@ jobs:
           TITLE="${{ inputs.version }}"
           BODY="## AI Proxy Desktop
 
-          Кроссплатформенное приложение (Tauri) и Node.js CLI с локальными шлюзами **Anthropic Messages API** и **OpenAI Chat / Responses API** поверх локальных AI CLI (Devin, Antigravity, OpenCode, Grok, Codex, Copilot, Cursor, Cline, Mistral, Kimi, Hermes и Custom ACP).
+          Cross-platform Tauri app and Node.js CLI exposing local **Anthropic Messages API** and **OpenAI Chat / Responses API** gateways on top of local AI CLIs (Devin, Antigravity, OpenCode, Grok, Codex, Copilot, Cursor, Cline, Mistral, Kimi, Hermes, and custom ACP agents).
 
-          ### Что включено
-          - Двойной шлюз: Anthropic (\`/v1/messages\`, \`/v1/models\`) и OpenAI/Codex (\`/v1/chat/completions\`, \`/v1/responses\`, \`/v1/models\`)
-          - Встроенная авторизация, мультиаккаунтность Antigravity и просмотр лимитов/квот
-          - Автозагрузка недостающих CLI, SQLite тест-чат, логи и учёт токенов/трат
-          - Встроенная проверка и установка обновлений из GitHub Releases
-          - Установщики: Windows (\`.exe\` NSIS / \`.msi\`), macOS (\`.dmg\` Universal), Linux (\`.AppImage\` / \`.deb\`)
+          ### Included
+          - Dual gateway: Anthropic (\`/v1/messages\`, \`/v1/models\`) and OpenAI/Codex (\`/v1/chat/completions\`, \`/v1/responses\`, \`/v1/models\`)
+          - Built-in authentication, Antigravity multi-account support, and live limits/quota inspection
+          - Automatic installation of missing CLI runtimes, SQLite-backed playground chats, detailed logs, and token/cost tracking
+          - Built-in update checks and installation from GitHub Releases
+          - Installers: Windows (\`.exe\` NSIS / \`.msi\`), macOS (Universal \`.dmg\`), Linux (\`.AppImage\` / \`.deb\`)
 
           ${{ inputs.notes }}"
           if gh release view "$TAG" >/dev/null 2>&1; then
@@ -180,13 +180,13 @@ jobs:
           releaseBody: |
             ## AI Proxy Desktop
 
-            Кроссплатформенное Tauri-приложение с локальными шлюзами **Anthropic Messages API** и **OpenAI Chat / Responses API** поверх локальных AI CLI (Devin, Antigravity, OpenCode, Grok, Codex, Copilot, Cursor, Cline, Mistral, Kimi, Hermes и Custom ACP).
+            Cross-platform Tauri app exposing local **Anthropic Messages API** and **OpenAI Chat / Responses API** gateways on top of local AI CLIs (Devin, Antigravity, OpenCode, Grok, Codex, Copilot, Cursor, Cline, Mistral, Kimi, Hermes, and custom ACP agents).
 
-            ### Что включено
-            - Двойной шлюз: Anthropic (`/v1/messages`, `/v1/models`) и OpenAI/Codex (`/v1/chat/completions`, `/v1/responses`, `/v1/models`)
-            - Встроенная авторизация, мультиаккаунтность Antigravity и просмотр живых лимитов/квот
-            - Автозагрузка недостающих CLI движков, локальная SQLite БД тест-чатов, подробные логи и учёт токенов/трат
-            - Установщики: Windows (`.exe` NSIS / `.msi`), macOS (`.dmg` Universal), Linux (`.AppImage` / `.deb`)
+            ### Included
+            - Dual gateway: Anthropic (`/v1/messages`, `/v1/models`) and OpenAI/Codex (`/v1/chat/completions`, `/v1/responses`, `/v1/models`)
+            - Built-in authentication, Antigravity multi-account support, and live limits/quota inspection
+            - Automatic installation of missing CLI runtimes, local SQLite playground chats, detailed logs, and token/cost tracking
+            - Installers: Windows (`.exe` NSIS / `.msi`), macOS (Universal `.dmg`), Linux (`.AppImage` / `.deb`)
 
             ${{ inputs.notes }}
           releaseDraft: false

@@ -10,6 +10,8 @@ import {
   BarChart3,
   ScrollText,
   Settings,
+  Copy,
+  Check,
 } from "lucide-react";
 import type {
   AppSettings,
@@ -28,20 +30,66 @@ import { UsageView } from "./UsageView";
 import { LogsView } from "./LogsView";
 import { SettingsView } from "./SettingsView";
 import { refreshQuotas } from "./quotaCache";
+import { I18nProvider, useI18n } from "./i18n";
 
 type TabId = "overview" | "chat" | "models" | "accounts" | "usage" | "logs" | "settings";
 
-const NAV_ITEMS: Array<{ id: TabId; label: string; icon: React.FC<{ className?: string }> }> = [
-  { id: "overview", label: "Шлюзы", icon: LayoutDashboard },
-  { id: "chat", label: "Тест-чат", icon: MessageSquare },
-  { id: "models", label: "Модели", icon: Boxes },
-  { id: "accounts", label: "Аккаунты и CLI", icon: KeyRound },
-  { id: "usage", label: "Траты", icon: BarChart3 },
-  { id: "logs", label: "Логи", icon: ScrollText },
-  { id: "settings", label: "Настройки", icon: Settings },
+const NAV_ITEMS: Array<{
+  id: TabId;
+  labelKey: string;
+  icon: React.FC<{ className?: string; strokeWidth?: number }>;
+}> = [
+  { id: "overview", labelKey: "Шлюзы", icon: LayoutDashboard },
+  { id: "chat", labelKey: "Тест-чат", icon: MessageSquare },
+  { id: "models", labelKey: "Модели", icon: Boxes },
+  { id: "accounts", labelKey: "Аккаунты и CLI", icon: KeyRound },
+  { id: "usage", labelKey: "Траты", icon: BarChart3 },
+  { id: "logs", labelKey: "Логи", icon: ScrollText },
+  { id: "settings", labelKey: "Настройки", icon: Settings },
 ];
 
-export function App() {
+const SidebarPortRow: React.FC<{
+  name: string;
+  port: number;
+  active: boolean;
+  host: string;
+  pathSuffix?: string;
+}> = ({ name, port, active, host, pathSuffix = "" }) => {
+  const [copied, setCopied] = useState(false);
+  const { t } = useI18n();
+  const url = `http://${host}:${port}${pathSuffix}`;
+  return (
+    <button
+      type="button"
+      title={copied ? t("Скопировано") : t("Скопировать {url}", { url })}
+      aria-label={t("Скопировать адрес {name}", { name })}
+      onClick={() => {
+        navigator.clipboard.writeText(url).catch(() => {});
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1400);
+      }}
+      className="group -mx-1.5 flex w-[calc(100%+0.75rem)] items-center justify-between rounded-[5px] px-1.5 py-0.5 text-left transition-colors hover:bg-[var(--bg-subtle)]"
+    >
+      <span className="flex items-center gap-1.5">
+        <span
+          className={`size-1.5 rounded-full ${active ? "bg-[var(--success)]" : "bg-[var(--border-strong)]"}`}
+        />
+        <span>{name}</span>
+      </span>
+      <span className="flex items-center gap-1 text-[var(--fg-muted)]">
+        {copied ? (
+          <Check className="size-3 text-[var(--success)]" />
+        ) : (
+          <Copy className="size-3 opacity-0 transition-opacity group-hover:opacity-100" />
+        )}
+        <span>:{port}</span>
+      </span>
+    </button>
+  );
+};
+
+function AppInner({ onLanguageChange }: { onLanguageChange: (lang: string) => void }) {
+  const { t } = useI18n();
   const [tab, setTab] = useState<TabId>("overview");
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [status, setStatus] = useState<ProxyRuntimeStatus | null>(null);
@@ -89,6 +137,10 @@ export function App() {
       u2.then((f) => f()).catch(() => {});
     };
   }, []);
+
+  useEffect(() => {
+    if (settings?.language) onLanguageChange(settings.language);
+  }, [settings?.language]);
 
   useEffect(() => {
     if (!settings || settings.checkUpdatesOnStart === false) return;
@@ -162,8 +214,8 @@ export function App() {
 
   if (!settings) {
     return (
-      <div className="h-dvh w-screen flex items-center justify-center bg-[var(--bg)] text-xs text-[var(--fg-muted)]">
-        Инициализация локального прокси...
+      <div className="h-dvh w-screen flex items-center justify-center bg-[var(--bg)] text-[12px] text-[var(--fg-subtle)]">
+        {t("Инициализация локального прокси…")}
       </div>
     );
   }
@@ -182,8 +234,8 @@ export function App() {
       />
 
       <div className="flex-1 flex min-h-0 overflow-hidden">
-        <nav className="w-52 shrink-0 border-r bg-[var(--sidebar-bg)] p-2.5 flex flex-col justify-between">
-          <div className="space-y-0.5">
+        <nav className="w-52 shrink-0 border-r bg-[var(--sidebar-bg)] px-2 py-2.5 flex flex-col justify-between">
+          <div className="space-y-px">
             {NAV_ITEMS.map((item) => {
               const Icon = item.icon;
               const active = tab === item.id;
@@ -192,16 +244,19 @@ export function App() {
                   key={item.id}
                   type="button"
                   onClick={() => setTab(item.id)}
-                  className={`w-full flex items-center gap-2.5 rounded-[7px] px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                  className={`w-full flex h-8 items-center gap-2.5 rounded-[6px] px-2 text-[12.5px] transition-colors ${
                     active
-                      ? "bg-[var(--bg-subtle)] text-[var(--fg)] shadow-[var(--panel-highlight)]"
-                      : "text-[var(--fg-muted)] hover:bg-[var(--bg-subtle)]/55 hover:text-[var(--fg)]"
+                      ? "bg-[var(--control-active)] font-medium text-[var(--fg)] shadow-[inset_0_0_0_1px_var(--border)]"
+                      : "text-[var(--fg-muted)] hover:bg-[var(--bg-subtle)] hover:text-[var(--fg)]"
                   }`}
                 >
-                  <Icon className={`size-4 shrink-0 ${active ? "text-[var(--accent)]" : "text-[var(--fg-subtle)]"}`} />
-                  <span className="truncate">{item.label}</span>
+                  <Icon
+                    className={`size-[15px] shrink-0 ${active ? "text-[var(--accent)]" : "text-[var(--fg-subtle)]"}`}
+                    strokeWidth={1.8}
+                  />
+                  <span className="truncate">{t(item.labelKey)}</span>
                   {item.id === "models" && models.length > 0 && (
-                    <span className="ml-auto rounded-[5px] bg-[var(--bg)] border border-[var(--border)] px-1.5 py-0.5 text-[10px] text-[var(--fg-subtle)] tabular-nums">
+                    <span className="ml-auto text-[11px] tabular-nums text-[var(--fg-subtle)]">
                       {models.length}
                     </span>
                   )}
@@ -210,8 +265,8 @@ export function App() {
             })}
           </div>
 
-          <div className="border-t pt-2.5 px-2 text-[11px] text-[var(--fg-subtle)] space-y-1.5 tabular-nums">
-            <div className="flex items-center justify-between">
+          <div className="space-y-1 border-t px-1.5 pt-2.5 text-[11px] text-[var(--fg-subtle)] tabular-nums">
+            <div className="flex items-center justify-between px-1.5">
               <span className="flex items-center gap-1.5">
                 <span
                   className={`size-1.5 rounded-full ${
@@ -222,37 +277,32 @@ export function App() {
                         : "bg-[var(--border-strong)]"
                   }`}
                 />
-                <span>Шлюз</span>
+                <span>{t("Шлюз")}</span>
               </span>
               <span className="text-[var(--fg-muted)]">
-                {status?.starting ? "запуск" : status?.running ? "работает" : "остановлен"}
+                {status?.starting
+                  ? t("запуск")
+                  : status?.running
+                    ? t("работает")
+                    : t("остановлен")}
               </span>
             </div>
-            <div className="flex items-center justify-between">
-              <span className="flex items-center gap-1.5">
-                <span
-                  className={`size-1.5 rounded-full ${
-                    status?.running && settings.enableAnthropic ? "bg-[var(--success)]" : "bg-[var(--border-strong)]"
-                  }`}
-                />
-                <span>Anthropic</span>
-              </span>
-              <span className="text-[var(--fg-muted)]">:{settings.anthropicPort}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="flex items-center gap-1.5">
-                <span
-                  className={`size-1.5 rounded-full ${
-                    status?.running && settings.enableOpenai ? "bg-[var(--success)]" : "bg-[var(--border-strong)]"
-                  }`}
-                />
-                <span>OpenAI</span>
-              </span>
-              <span className="text-[var(--fg-muted)]">:{settings.openaiPort}</span>
-            </div>
+            <SidebarPortRow
+              name="Anthropic"
+              port={settings.anthropicPort}
+              host={settings.host}
+              active={Boolean(status?.running && settings.enableAnthropic)}
+            />
+            <SidebarPortRow
+              name="OpenAI"
+              port={settings.openaiPort}
+              host={settings.host}
+              pathSuffix="/v1"
+              active={Boolean(status?.running && settings.enableOpenai)}
+            />
             {appVersion && (
-              <div className="pt-1 border-t border-[var(--border)]/60 flex items-center justify-between text-[10px] text-[var(--fg-subtle)]">
-                <span>Версия</span>
+              <div className="flex items-center justify-between px-1.5 pt-1 text-[11px] text-[var(--fg-subtle)]">
+                <span>{t("Версия")}</span>
                 <span>v{appVersion}</span>
               </div>
             )}
@@ -261,16 +311,14 @@ export function App() {
 
         <main className="flex-1 min-w-0 min-h-0 overflow-hidden bg-[var(--bg)]">
           {tab === "overview" && (
-            <div className="h-full overflow-y-auto">
-              <OverviewView
-                status={status}
-                settings={settings}
-                usage={usage}
-                onWarmUp={handleWarmUp}
-                warmingUp={warmingUp}
-                onNavigate={(t) => setTab(t as TabId)}
-              />
-            </div>
+            <OverviewView
+              status={status}
+              settings={settings}
+              usage={usage}
+              onWarmUp={handleWarmUp}
+              warmingUp={warmingUp}
+              onNavigate={(tb) => setTab(tb as TabId)}
+            />
           )}
           {tab === "chat" && (
             <ChatView
@@ -325,6 +373,15 @@ export function App() {
         </main>
       </div>
     </div>
+  );
+}
+
+export function App() {
+  const [languageSetting, setLanguageSetting] = useState<string | undefined>(undefined);
+  return (
+    <I18nProvider languageSetting={languageSetting}>
+      <AppInner onLanguageChange={setLanguageSetting} />
+    </I18nProvider>
   );
 }
 

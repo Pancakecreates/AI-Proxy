@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, Search } from "lucide-react";
+import { useI18n } from "./i18n";
 
 export interface SelectOption {
   value: string;
@@ -26,15 +27,19 @@ export const Select: React.FC<SelectProps> = ({
   value,
   onChange,
   options,
-  placeholder = "Выбрать...",
+  placeholder,
   searchable = false,
-  searchPlaceholder = "Поиск...",
-  emptyLabel = "Ничего не найдено",
+  searchPlaceholder,
+  emptyLabel,
   ariaLabel,
   className = "",
   buttonClassName = "",
   disabled = false,
 }) => {
+  const { t } = useI18n();
+  const resolvedPlaceholder = placeholder ?? t("Выбрать...");
+  const resolvedSearchPlaceholder = searchPlaceholder ?? t("Поиск...");
+  const resolvedEmptyLabel = emptyLabel ?? t("Ничего не найдено");
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(-1);
@@ -158,10 +163,10 @@ export const Select: React.FC<SelectProps> = ({
         aria-controls={open ? listId.current : undefined}
         onClick={() => (open ? close() : openMenu())}
         onKeyDown={onButtonKeyDown}
-        className={`inline-flex h-8 w-full items-center justify-between gap-2 rounded-[7px] border border-[var(--border)] bg-[var(--bg)] px-2.5 text-xs text-[var(--fg)] transition-colors hover:border-[var(--border-strong)] hover:bg-[var(--bg-subtle)]/60 disabled:opacity-45 disabled:hover:bg-[var(--bg)] ${buttonClassName}`}
+        className={`inline-flex h-7.5 w-full items-center justify-between gap-2 rounded-[6px] border border-transparent bg-[var(--bg-subtle)] px-2.5 text-[12px] text-[var(--fg)] transition-colors hover:bg-[var(--bg-hover)] disabled:opacity-45 disabled:hover:bg-[var(--bg-subtle)] ${buttonClassName}`}
       >
         <span className={`truncate ${selected ? "" : "text-[var(--fg-subtle)]"}`}>
-          {selected ? selected.label : placeholder}
+          {selected ? selected.label : resolvedPlaceholder}
         </span>
         <ChevronDown
           className={`size-3.5 shrink-0 text-[var(--fg-subtle)] transition-transform duration-150 ${open ? "rotate-180" : ""}`}
@@ -174,7 +179,7 @@ export const Select: React.FC<SelectProps> = ({
           role="listbox"
           aria-label={ariaLabel}
           aria-activedescendant={activeIndex >= 0 ? `${listId.current}-opt-${activeIndex}` : undefined}
-          className="absolute left-0 top-full z-50 mt-1.5 w-full min-w-[11rem] overflow-hidden rounded-[9px] border border-[var(--border-strong)] bg-[var(--bg-elevated)] shadow-[var(--shadow-popover)]"
+          className="absolute left-0 top-full z-50 mt-1 w-full min-w-[11rem] overflow-hidden rounded-[8px] border border-[var(--border-strong)] bg-[var(--bg-elevated)] shadow-[var(--shadow-popover)]"
         >
           {searchable && (
             <div className="border-b p-1.5">
@@ -187,15 +192,15 @@ export const Select: React.FC<SelectProps> = ({
                     setQuery(e.target.value);
                     setActiveIndex(0);
                   }}
-                  placeholder={searchPlaceholder}
-                  className="h-7 w-full rounded-[6px] border border-transparent bg-[var(--bg)] pl-7 pr-2 text-xs outline-none placeholder:text-[var(--fg-subtle)] focus:border-[var(--border-strong)]"
+                  placeholder={resolvedSearchPlaceholder}
+                  className="h-7 w-full rounded-[5px] border border-transparent bg-[var(--bg-subtle)] pl-7 pr-2 text-[12px] outline-none placeholder:text-[var(--fg-subtle)] focus:border-[var(--border-strong)]"
                 />
               </div>
             </div>
           )}
           <div ref={listRef} className="max-h-64 overflow-y-auto p-1">
             {filtered.length === 0 ? (
-              <div className="px-2.5 py-3 text-center text-xs text-[var(--fg-subtle)]">{emptyLabel}</div>
+              <div className="px-2.5 py-3 text-center text-xs text-[var(--fg-subtle)]">{resolvedEmptyLabel}</div>
             ) : (
               filtered.map((o, i) => {
                 const isSelected = o.value === value;
@@ -210,7 +215,7 @@ export const Select: React.FC<SelectProps> = ({
                     aria-disabled={o.disabled || undefined}
                     onPointerEnter={() => setActiveIndex(i)}
                     onClick={() => pick(o)}
-                    className={`flex cursor-pointer items-center justify-between gap-2 rounded-[6px] px-2.5 py-1.5 text-xs transition-colors ${
+                    className={`flex cursor-pointer items-center justify-between gap-2 rounded-[5px] px-2.5 py-1.5 text-[12px] transition-colors ${
                       o.disabled ? "cursor-not-allowed opacity-45" : ""
                     } ${
                       isActive
@@ -223,7 +228,7 @@ export const Select: React.FC<SelectProps> = ({
                     <span className="min-w-0">
                       <span className="block truncate font-medium">{o.label}</span>
                       {o.hint && (
-                        <span className="block truncate text-[10px] text-[var(--fg-subtle)]">{o.hint}</span>
+                        <span className="block truncate text-[11px] text-[var(--fg-subtle)]">{o.hint}</span>
                       )}
                     </span>
                     {isSelected && <Check className="size-3.5 shrink-0 text-[var(--accent)]" />}

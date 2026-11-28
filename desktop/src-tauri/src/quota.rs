@@ -45,7 +45,7 @@ fn spawn_hidden_cmd(exe: &str, args: &[String], envs: &[(&str, &str)]) -> Comman
     cmd
 }
 
-pub async fn fetch_antigravity_quota(account: &AntigravityAccountConfig) -> AccountQuotaReport {
+pub async fn fetch_antigravity_quota(account: &AntigravityAccountConfig, proxy: Option<&str>) -> AccountQuotaReport {
     let now = Utc::now().to_rfc3339();
     let app_data_path = Path::new(&account.gemini_dir).join(&account.app_data_dir);
     let token_file = app_data_path.join("antigravity-oauth-token");
@@ -84,10 +84,10 @@ pub async fn fetch_antigravity_quota(account: &AntigravityAccountConfig) -> Acco
 
     report.signed_in = true;
 
-    let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-    {
+    let client = match crate::net::build_client(
+        proxy.as_deref(),
+        Some(std::time::Duration::from_secs(10)),
+    ) {
         Ok(c) => c,
         Err(e) => {
             report.error = Some(e.to_string());
@@ -230,6 +230,7 @@ pub async fn fetch_codex_quota(settings: &AppSettings) -> AccountQuotaReport {
 
     let args = vec!["app-server".into(), "--listen".into(), "stdio://".into()];
     let mut cmd = spawn_hidden_cmd(&exe, &args, &[]);
+    crate::net::apply_proxy_env(&mut cmd, settings.proxy_url.as_deref(), &std::collections::HashMap::new());
     let Ok(mut child) = cmd.spawn() else {
         report.error = Some("Не удалось запустить codex app-server".to_string());
         return report;
