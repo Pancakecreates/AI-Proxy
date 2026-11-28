@@ -396,7 +396,16 @@ pub async fn get_accounts_and_quotas(state: State<'_, Arc<AppState>>) -> Result<
     let agy_futures: Vec<_> = rt
         .antigravity_accounts
         .iter()
-        .map(|acc| fetch_antigravity_quota(acc, s.proxy_url.as_deref()))
+        .map(|acc| {
+            let key = format!("antigravity:{}", acc.id);
+            let proxy = crate::net::resolve_provider_proxy(
+                &key,
+                &s.provider_proxies,
+                s.proxy_url.as_deref(),
+            )
+            .map(str::to_string);
+            async move { fetch_antigravity_quota(acc, proxy.as_deref()).await }
+        })
         .collect();
     let agy_results = futures::future::join_all(agy_futures).await;
     reports.extend(agy_results);

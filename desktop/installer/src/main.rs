@@ -201,7 +201,7 @@ fn main() {
         .build(&event_loop)
         .expect("build setup window");
 
-    if let Some(monitor) = window.current_monitor() {
+    if let Some(monitor) = event_loop.primary_monitor() {
         let screen = monitor.size();
         let win = window.inner_size();
         let origin = monitor.position();

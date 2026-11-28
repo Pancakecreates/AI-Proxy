@@ -233,6 +233,13 @@ pub async fn fetch_devin_plan(settings: &AppSettings) -> AccountQuotaReport {
 
     let args = vec!["auth".to_string(), "status".to_string()];
     let mut cmd = spawn_hidden_cmd(&exe, &args, &[]);
+    let proxy = crate::net::resolve_provider_proxy(
+        "devin",
+        &settings.provider_proxies,
+        settings.proxy_url.as_deref(),
+    )
+    .map(str::to_string);
+    crate::net::apply_proxy_env(&mut cmd, proxy.as_deref(), &std::collections::HashMap::new());
     let output = match tokio::time::timeout(std::time::Duration::from_secs(10), cmd.output()).await {
         Ok(Ok(out)) if out.status.success() => out,
         _ => {
@@ -298,7 +305,13 @@ pub async fn fetch_codex_quota(settings: &AppSettings) -> AccountQuotaReport {
 
     let args = vec!["app-server".into(), "--listen".into(), "stdio://".into()];
     let mut cmd = spawn_hidden_cmd(&exe, &args, &[]);
-    crate::net::apply_proxy_env(&mut cmd, settings.proxy_url.as_deref(), &std::collections::HashMap::new());
+    let proxy = crate::net::resolve_provider_proxy(
+        "codex",
+        &settings.provider_proxies,
+        settings.proxy_url.as_deref(),
+    )
+    .map(str::to_string);
+    crate::net::apply_proxy_env(&mut cmd, proxy.as_deref(), &std::collections::HashMap::new());
     let Ok(mut child) = cmd.spawn() else {
         report.error = Some("Не удалось запустить codex app-server".to_string());
         return report;
