@@ -2,7 +2,7 @@ use crate::acp_client::{AcpBackend, AcpEndpointConfig, LogFn, StreamSink};
 use crate::cancel::CancelToken;
 use crate::codex_client::CodexBackend;
 use crate::external_client::ExternalBackend;
-use crate::discovery::{merge_antigravity_accounts, resolve_runtime_executable};
+use crate::discovery::resolve_runtime_executable;
 use crate::models::{
     assign_unique_display_names, decode_gateway_model_id, peel_effort_and_speed_suffixes,
 };
@@ -28,7 +28,7 @@ impl BackendInstance {
     pub fn key(&self) -> &str {
         match self {
             Self::Acp(a) => &a.cfg.key,
-            Self::Codex(_) => "codex",
+            Self::Codex(c) => &c.key,
             Self::External(e) => &e.key,
         }
     }
@@ -44,7 +44,7 @@ impl BackendInstance {
     pub fn label(&self) -> &str {
         match self {
             Self::Acp(a) => &a.cfg.label,
-            Self::Codex(_) => "Codex",
+            Self::Codex(c) => &c.label,
             Self::External(e) => &e.cfg.display_name,
         }
     }
@@ -312,73 +312,231 @@ impl BackendRouter {
         let s = self.settings.read().await.clone();
         let mut next: Vec<BackendInstance> = Vec::new();
 
-        if s.enable_devin {
-            if let Some(exe) = resolve_runtime_executable("devin", &["devin"], s.devin_path.as_deref()) {
+        struct AcpBase {
+            provider: &'static str,
+            kind: BackendKind,
+            label: &'static str,
+            args: Vec<String>,
+            env: HashMap<String, Option<String>>,
+            auth: Vec<String>,
+            close_session: bool,
+            close_force: bool,
+            prefix: &'static str,
+            desc: &'static str,
+            opencode_filter: Option<(crate::types::OpenCodeFilterMode, Vec<String>)>,
+        }
+
+        fn push_acp(
+            next: &mut Vec<BackendInstance>,
+            settings_arc: &Arc<RwLock<AppSettings>>,
+            log: &LogFn,
+            s: &AppSettings,
+            exe: Option<String>,
+            base: AcpBase,
+        ) {
+            let Some(exe) = exe else { return };
+            let accounts: Vec<crate::types::ProviderAccountConfig> =
+                crate::accounts::accounts_for_provider(s, base.provider)
+                    .into_iter()
+                    .filter(|a| a.enabled)
+                    .collect();
+            if accounts.is_empty() && base.provider == "antigravity" {
+                return;
+            }
+            let variants: Vec<Option<crate::types::ProviderAccountConfig>> = if accounts.is_empty() {
+                vec![None]
+            } else {
+                accounts.into_iter().map(Some).collect()
+            };
+            let multi = variants.len() > 1;
+            for (i, acc) in variants.into_iter().enumerate() {
+                let mut env = base.env.clone();
+                let mut args = base.args.clone();
+                let mut prefix = base.prefix.to_string();
+                if let Some(a) = &acc {
+                    if base.provider == "antigravity" {
+                        let app_data = a
+                            .app_data_dir
+                            .clone()
+                            .filter(|v| !v.trim().is_empty())
+                            .unwrap_or_else(|| "antigravity-acp".into());
+                        args = vec![
+                            "acp".into(),
+                            format!("--gemini-dir={}", a.profile_dir),
+                            format!("--app-data-dir={app_data}"),
+                        ];
+                        prefix = format!("agy-{}.", a.id);
+                    } else {
+                        env.extend(crate::accounts::profile_env_overrides(base.provider, a));
+                        prefix = crate::accounts::account_model_prefix(base.provider, acc.as_ref(), base.prefix);
+                    }
+                }
+                let key = crate::accounts::account_backend_key(base.provider, acc.as_ref());
+                let label = if acc.is_some() {
+                    crate::accounts::account_backend_label(base.label, i, acc.as_ref())
+                } else {
+                    base.label.to_string()
+                };
+                let desc = if multi {
+                    format!("{} {}", base.desc, i + 1)
+                } else {
+                    base.desc.to_string()
+                };
                 next.push(BackendInstance::Acp(AcpBackend::new(
                     AcpEndpointConfig {
-                        key: "devin".into(),
-                        kind: BackendKind::Devin,
-                        label: "Devin".into(),
-                        executable: exe,
-                        args: vec!["acp".into(), "--process-model".into(), s.process_model.as_str().into()],
-                        env_overrides: HashMap::new(),
-                        auth_method_ids: Vec::new(),
-                        supports_close_session: true,
-                        close_force_meta: true,
-                        qualified_prefix: String::new(),
-                        description_prefix: "Devin".into(),
-                        opencode_filter: None,
+                        key,
+                        kind: base.kind,
+                        label,
+                        executable: exe.clone(),
+                        args,
+                        env_overrides: env,
+                        auth_method_ids: base.auth.clone(),
+                        supports_close_session: base.close_session,
+                        close_force_meta: base.close_force,
+                        qualified_prefix: prefix,
+                        description_prefix: desc,
+                        opencode_filter: base.opencode_filter.clone(),
                         discovery_cwd: None,
                     },
-                    self.settings.clone(),
-                    self.log.clone(),
+                    settings_arc.clone(),
+                    log.clone(),
                 )));
             }
         }
 
+        if s.enable_devin {
+            let exe = resolve_runtime_executable("devin", &["devin"], s.devin_path.as_deref());
+            push_acp(&mut next, &self.settings, &self.log, &s, exe, AcpBase {
+                provider: "devin",
+                kind: BackendKind::Devin,
+                label: "Devin",
+                args: vec!["acp".into(), "--process-model".into(), s.process_model.as_str().into()],
+                env: HashMap::new(),
+                auth: Vec::new(),
+                close_session: true,
+                close_force: true,
+                prefix: "",
+                desc: "Devin",
+                opencode_filter: None,
+            });
+        }
+
         if s.enable_antigravity {
-            if let Some(exe) = resolve_runtime_executable("antigravity", &["antigravity"], s.antigravity_path.as_deref()) {
-                let accounts = merge_antigravity_accounts(&s.antigravity_accounts);
-                for (i, acc) in accounts.into_iter().filter(|a| a.enabled).enumerate() {
-                    let num = i + 1;
-                    let label = format!("Antigravity {num} ({})", acc.label);
-                    let mut env = HashMap::new();
-                    env.insert("WSL_DISTRO_NAME".into(), Some("OpenBot".into()));
-                    env.insert("ANTIGRAVITY_CLI_NO_AUTO_UPDATE".into(), Some("1".into()));
-                    for k in [
-                        "ANTIGRAVITY_AGENT",
-                        "ANTIGRAVITY_AGENTAPI_EXE",
-                        "ANTIGRAVITY_APP_DATA_DIR",
-                        "ANTIGRAVITY_CONVERSATION_ID",
-                        "ANTIGRAVITY_CSRF_TOKEN",
-                        "ANTIGRAVITY_LS_ADDRESS",
-                        "ANTIGRAVITY_LS_VERSION",
-                        "ANTIGRAVITY_SOURCE_METADATA",
-                        "ANTIGRAVITY_TRAJECTORY_ID",
-                        "GEMINI_HOME",
-                    ] {
-                        env.insert(k.into(), None);
-                    }
-                    next.push(BackendInstance::Acp(AcpBackend::new(
-                        AcpEndpointConfig {
-                            key: format!("antigravity:{}", acc.id),
-                            kind: BackendKind::Antigravity,
-                            label,
-                            executable: exe.clone(),
-                            args: vec![
-                                "acp".into(),
-                                format!("--gemini-dir={}", acc.gemini_dir),
-                                format!("--app-data-dir={}", acc.app_data_dir),
-                            ],
-                            env_overrides: env,
-                            auth_method_ids: Vec::new(),
-                            supports_close_session: false,
-                            close_force_meta: false,
-                            qualified_prefix: format!("agy-{}.", acc.id),
-                            description_prefix: format!("Antigravity {num}"),
-                            opencode_filter: None,
-                            discovery_cwd: None,
+            let exe = resolve_runtime_executable("antigravity", &["antigravity"], s.antigravity_path.as_deref());
+            let mut env = HashMap::new();
+            env.insert("WSL_DISTRO_NAME".into(), Some("OpenBot".into()));
+            env.insert("ANTIGRAVITY_CLI_NO_AUTO_UPDATE".into(), Some("1".into()));
+            for k in [
+                "ANTIGRAVITY_AGENT",
+                "ANTIGRAVITY_AGENTAPI_EXE",
+                "ANTIGRAVITY_APP_DATA_DIR",
+                "ANTIGRAVITY_CONVERSATION_ID",
+                "ANTIGRAVITY_CSRF_TOKEN",
+                "ANTIGRAVITY_LS_ADDRESS",
+                "ANTIGRAVITY_LS_VERSION",
+                "ANTIGRAVITY_SOURCE_METADATA",
+                "ANTIGRAVITY_TRAJECTORY_ID",
+                "GEMINI_HOME",
+            ] {
+                env.insert(k.into(), None);
+            }
+            push_acp(&mut next, &self.settings, &self.log, &s, exe, AcpBase {
+                provider: "antigravity",
+                kind: BackendKind::Antigravity,
+                label: "Antigravity",
+                args: Vec::new(),
+                env,
+                auth: Vec::new(),
+                close_session: false,
+                close_force: false,
+                prefix: "agy.",
+                desc: "Antigravity",
+                opencode_filter: None,
+            });
+        }
+
+        if s.enable_opencode {
+            let exe = resolve_runtime_executable("opencode", &["opencode"], s.opencode_path.as_deref());
+            let mut env = HashMap::new();
+            env.insert("OPENCODE_DISABLE_AUTOUPDATE".into(), Some("1".into()));
+            push_acp(&mut next, &self.settings, &self.log, &s, exe, AcpBase {
+                provider: "opencode",
+                kind: BackendKind::Opencode,
+                label: "OpenCode",
+                args: vec!["acp".into()],
+                env,
+                auth: Vec::new(),
+                close_session: false,
+                close_force: false,
+                prefix: "oc.",
+                desc: "OpenCode",
+                opencode_filter: Some((s.opencode_filter, s.opencode_providers.clone())),
+            });
+        }
+
+        if s.enable_grok {
+            let exe = resolve_runtime_executable("grok", &["grok"], s.grok_path.as_deref());
+            let mut env = HashMap::new();
+            env.insert("GROK_OAUTH2_REFERRER".into(), Some("openbot".into()));
+            let mut auth_methods = Vec::new();
+            if let Some(key) = s.xai_api_key.as_deref().map(|k| k.trim()).filter(|k| !k.is_empty()) {
+                env.insert("XAI_API_KEY".into(), Some(key.to_string()));
+                auth_methods.push("xai.api_key".to_string());
+            }
+            auth_methods.push("cached_token".to_string());
+            let perm = if s.mode == crate::types::DevinMode::Ask {
+                "default"
+            } else {
+                "bypassPermissions"
+            };
+            push_acp(&mut next, &self.settings, &self.log, &s, exe, AcpBase {
+                provider: "grok",
+                kind: BackendKind::Grok,
+                label: "Grok",
+                args: vec![
+                    "--no-auto-update".into(),
+                    "--permission-mode".into(),
+                    perm.into(),
+                    "agent".into(),
+                    "stdio".into(),
+                ],
+                env,
+                auth: auth_methods,
+                close_session: false,
+                close_force: false,
+                prefix: "grok.",
+                desc: "Grok",
+                opencode_filter: None,
+            });
+        }
+
+        if s.enable_codex {
+            if let Some(exe) = resolve_runtime_executable("codex", &["codex"], s.codex_path.as_deref()) {
+                let accounts: Vec<crate::types::ProviderAccountConfig> =
+                    crate::accounts::accounts_for_provider(&s, "codex")
+                        .into_iter()
+                        .filter(|a| a.enabled)
+                        .collect();
+                let variants: Vec<Option<crate::types::ProviderAccountConfig>> = if accounts.is_empty() {
+                    vec![None]
+                } else {
+                    accounts.into_iter().map(Some).collect()
+                };
+                for (i, acc) in variants.into_iter().enumerate() {
+                    let env = acc
+                        .as_ref()
+                        .map(|a| crate::accounts::profile_env_overrides("codex", a))
+                        .unwrap_or_default();
+                    next.push(BackendInstance::Codex(CodexBackend::new_with_profile(
+                        exe.clone(),
+                        crate::accounts::account_backend_key("codex", acc.as_ref()),
+                        if acc.is_some() {
+                            crate::accounts::account_backend_label("Codex", i, acc.as_ref())
+                        } else {
+                            "Codex".to_string()
                         },
+                        crate::accounts::account_model_prefix("codex", acc.as_ref(), "codex."),
+                        env,
                         self.settings.clone(),
                         self.log.clone(),
                     )));
@@ -386,236 +544,114 @@ impl BackendRouter {
             }
         }
 
-        if s.enable_opencode {
-            if let Some(exe) = resolve_runtime_executable("opencode", &["opencode"], s.opencode_path.as_deref()) {
-                let mut env = HashMap::new();
-                env.insert("OPENCODE_DISABLE_AUTOUPDATE".into(), Some("1".into()));
-                next.push(BackendInstance::Acp(AcpBackend::new(
-                    AcpEndpointConfig {
-                        key: "opencode".into(),
-                        kind: BackendKind::Opencode,
-                        label: "OpenCode".into(),
-                        executable: exe,
-                        args: vec!["acp".into()],
-                        env_overrides: env,
-                        auth_method_ids: Vec::new(),
-                        supports_close_session: false,
-                        close_force_meta: false,
-                        qualified_prefix: "oc.".into(),
-                        description_prefix: "OpenCode".into(),
-                        opencode_filter: Some((s.opencode_filter, s.opencode_providers.clone())),
-                        discovery_cwd: None,
-                    },
-                    self.settings.clone(),
-                    self.log.clone(),
-                )));
-            }
-        }
-
-        if s.enable_grok {
-            if let Some(exe) = resolve_runtime_executable("grok", &["grok"], s.grok_path.as_deref()) {
-                let mut env = HashMap::new();
-                env.insert("GROK_OAUTH2_REFERRER".into(), Some("openbot".into()));
-                let mut auth_methods = Vec::new();
-                if let Some(key) = s.xai_api_key.as_deref().map(|k| k.trim()).filter(|k| !k.is_empty()) {
-                    env.insert("XAI_API_KEY".into(), Some(key.to_string()));
-                    auth_methods.push("xai.api_key".to_string());
-                }
-                auth_methods.push("cached_token".to_string());
-
-                let perm = if s.mode == crate::types::DevinMode::Ask {
-                    "default"
-                } else {
-                    "bypassPermissions"
-                };
-                next.push(BackendInstance::Acp(AcpBackend::new(
-                    AcpEndpointConfig {
-                        key: "grok".into(),
-                        kind: BackendKind::Grok,
-                        label: "Grok".into(),
-                        executable: exe,
-                        args: vec![
-                            "--no-auto-update".into(),
-                            "--permission-mode".into(),
-                            perm.into(),
-                            "agent".into(),
-                            "stdio".into(),
-                        ],
-                        env_overrides: env,
-                        auth_method_ids: auth_methods,
-                        supports_close_session: false,
-                        close_force_meta: false,
-                        qualified_prefix: "grok.".into(),
-                        description_prefix: "Grok".into(),
-                        opencode_filter: None,
-                        discovery_cwd: None,
-                    },
-                    self.settings.clone(),
-                    self.log.clone(),
-                )));
-            }
-        }
-
-        if s.enable_codex {
-            if let Some(exe) = resolve_runtime_executable("codex", &["codex"], s.codex_path.as_deref()) {
-                next.push(BackendInstance::Codex(CodexBackend::new(
-                    exe,
-                    self.settings.clone(),
-                    self.log.clone(),
-                )));
-            }
-        }
-
         if s.enable_copilot {
-            if let Some(exe) = resolve_runtime_executable("copilot", &["copilot"], s.copilot_path.as_deref()) {
-                next.push(BackendInstance::Acp(AcpBackend::new(
-                    AcpEndpointConfig {
-                        key: "copilot".into(),
-                        kind: BackendKind::Copilot,
-                        label: "Copilot".into(),
-                        executable: exe,
-                        args: vec!["--acp".into(), "--no-auto-update".into()],
-                        env_overrides: HashMap::new(),
-                        auth_method_ids: Vec::new(),
-                        supports_close_session: false,
-                        close_force_meta: false,
-                        qualified_prefix: "copilot.".into(),
-                        description_prefix: "GitHub Copilot".into(),
-                        opencode_filter: None,
-                        discovery_cwd: None,
-                    },
-                    self.settings.clone(),
-                    self.log.clone(),
-                )));
-            }
+            let exe = resolve_runtime_executable("copilot", &["copilot"], s.copilot_path.as_deref());
+            push_acp(&mut next, &self.settings, &self.log, &s, exe, AcpBase {
+                provider: "copilot",
+                kind: BackendKind::Copilot,
+                label: "Copilot",
+                args: vec!["--acp".into(), "--no-auto-update".into()],
+                env: HashMap::new(),
+                auth: Vec::new(),
+                close_session: false,
+                close_force: false,
+                prefix: "copilot.",
+                desc: "GitHub Copilot",
+                opencode_filter: None,
+            });
         }
 
         if s.enable_cursor {
-            if let Some(exe) = resolve_runtime_executable("cursor", &["cursor-agent", "agent"], s.cursor_path.as_deref()) {
-                next.push(BackendInstance::Acp(AcpBackend::new(
-                    AcpEndpointConfig {
-                        key: "cursor".into(),
-                        kind: BackendKind::Cursor,
-                        label: "Cursor".into(),
-                        executable: exe,
-                        args: vec!["acp".into()],
-                        env_overrides: HashMap::new(),
-                        auth_method_ids: Vec::new(),
-                        supports_close_session: false,
-                        close_force_meta: false,
-                        qualified_prefix: "cursor.".into(),
-                        description_prefix: "Cursor".into(),
-                        opencode_filter: None,
-                        discovery_cwd: None,
-                    },
-                    self.settings.clone(),
-                    self.log.clone(),
-                )));
-            }
+            let exe = resolve_runtime_executable("cursor", &["cursor-agent", "agent"], s.cursor_path.as_deref());
+            push_acp(&mut next, &self.settings, &self.log, &s, exe, AcpBase {
+                provider: "cursor",
+                kind: BackendKind::Cursor,
+                label: "Cursor",
+                args: vec!["acp".into()],
+                env: HashMap::new(),
+                auth: Vec::new(),
+                close_session: false,
+                close_force: false,
+                prefix: "cursor.",
+                desc: "Cursor",
+                opencode_filter: None,
+            });
         }
 
         if s.enable_cline {
-            if let Some(exe) = resolve_runtime_executable("cline", &["cline"], s.cline_path.as_deref()) {
-                let mut env = HashMap::new();
-                env.insert("CLINE_SESSION_BACKEND_MODE".into(), Some("local".into()));
-                env.insert("CLINE_NO_AUTO_UPDATE".into(), Some("1".into()));
-                next.push(BackendInstance::Acp(AcpBackend::new(
-                    AcpEndpointConfig {
-                        key: "cline".into(),
-                        kind: BackendKind::Cline,
-                        label: "Cline".into(),
-                        executable: exe,
-                        args: vec!["--acp".into()],
-                        env_overrides: env,
-                        auth_method_ids: vec!["cline".into()],
-                        supports_close_session: false,
-                        close_force_meta: false,
-                        qualified_prefix: "cline.".into(),
-                        description_prefix: "Cline".into(),
-                        opencode_filter: None,
-                        discovery_cwd: None,
-                    },
-                    self.settings.clone(),
-                    self.log.clone(),
-                )));
-            }
+            let exe = resolve_runtime_executable("cline", &["cline"], s.cline_path.as_deref());
+            let mut env = HashMap::new();
+            env.insert("CLINE_SESSION_BACKEND_MODE".into(), Some("local".into()));
+            env.insert("CLINE_NO_AUTO_UPDATE".into(), Some("1".into()));
+            push_acp(&mut next, &self.settings, &self.log, &s, exe, AcpBase {
+                provider: "cline",
+                kind: BackendKind::Cline,
+                label: "Cline",
+                args: vec!["--acp".into()],
+                env,
+                auth: vec!["cline".into()],
+                close_session: false,
+                close_force: false,
+                prefix: "cline.",
+                desc: "Cline",
+                opencode_filter: None,
+            });
         }
 
         if s.enable_mistral {
-            if let Some(exe) = resolve_runtime_executable("mistral", &["vibe-acp", "vibe"], s.mistral_path.as_deref()) {
-                let mut env = HashMap::new();
-                env.insert("VIBE_ENABLE_TELEMETRY".into(), Some("false".into()));
-                env.insert("VIBE_EXPERIMENTAL_ENABLE_MODEL_CATALOG".into(), Some("true".into()));
-                next.push(BackendInstance::Acp(AcpBackend::new(
-                    AcpEndpointConfig {
-                        key: "mistral".into(),
-                        kind: BackendKind::Mistral,
-                        label: "Mistral Vibe".into(),
-                        executable: exe,
-                        args: Vec::new(),
-                        env_overrides: env,
-                        auth_method_ids: vec!["browser-auth".into()],
-                        supports_close_session: false,
-                        close_force_meta: false,
-                        qualified_prefix: "mistral.".into(),
-                        description_prefix: "Mistral".into(),
-                        opencode_filter: None,
-                        discovery_cwd: None,
-                    },
-                    self.settings.clone(),
-                    self.log.clone(),
-                )));
-            }
+            let exe = resolve_runtime_executable("mistral", &["vibe-acp", "vibe"], s.mistral_path.as_deref());
+            let mut env = HashMap::new();
+            env.insert("VIBE_ENABLE_TELEMETRY".into(), Some("false".into()));
+            env.insert("VIBE_EXPERIMENTAL_ENABLE_MODEL_CATALOG".into(), Some("true".into()));
+            push_acp(&mut next, &self.settings, &self.log, &s, exe, AcpBase {
+                provider: "mistral",
+                kind: BackendKind::Mistral,
+                label: "Mistral Vibe",
+                args: Vec::new(),
+                env,
+                auth: vec!["browser-auth".into()],
+                close_session: false,
+                close_force: false,
+                prefix: "mistral.",
+                desc: "Mistral",
+                opencode_filter: None,
+            });
         }
 
         if s.enable_kimi {
-            if let Some(exe) = resolve_runtime_executable("kimi", &["kimi"], s.kimi_path.as_deref()) {
-                let mut env = HashMap::new();
-                env.insert("KIMI_CLI_NO_AUTO_UPDATE".into(), Some("1".into()));
-                next.push(BackendInstance::Acp(AcpBackend::new(
-                    AcpEndpointConfig {
-                        key: "kimi".into(),
-                        kind: BackendKind::Kimi,
-                        label: "Kimi".into(),
-                        executable: exe,
-                        args: vec!["acp".into()],
-                        env_overrides: env,
-                        auth_method_ids: Vec::new(),
-                        supports_close_session: false,
-                        close_force_meta: false,
-                        qualified_prefix: "kimi.".into(),
-                        description_prefix: "Kimi".into(),
-                        opencode_filter: None,
-                        discovery_cwd: None,
-                    },
-                    self.settings.clone(),
-                    self.log.clone(),
-                )));
-            }
+            let exe = resolve_runtime_executable("kimi", &["kimi"], s.kimi_path.as_deref());
+            let mut env = HashMap::new();
+            env.insert("KIMI_CLI_NO_AUTO_UPDATE".into(), Some("1".into()));
+            push_acp(&mut next, &self.settings, &self.log, &s, exe, AcpBase {
+                provider: "kimi",
+                kind: BackendKind::Kimi,
+                label: "Kimi",
+                args: vec!["acp".into()],
+                env,
+                auth: Vec::new(),
+                close_session: false,
+                close_force: false,
+                prefix: "kimi.",
+                desc: "Kimi",
+                opencode_filter: None,
+            });
         }
 
         if s.enable_hermes {
-            if let Some(exe) = resolve_runtime_executable("hermes", &["hermes"], s.hermes_path.as_deref()) {
-                next.push(BackendInstance::Acp(AcpBackend::new(
-                    AcpEndpointConfig {
-                        key: "hermes".into(),
-                        kind: BackendKind::Hermes,
-                        label: "Hermes".into(),
-                        executable: exe,
-                        args: vec!["acp".into()],
-                        env_overrides: HashMap::new(),
-                        auth_method_ids: Vec::new(),
-                        supports_close_session: false,
-                        close_force_meta: false,
-                        qualified_prefix: "hermes.".into(),
-                        description_prefix: "Hermes".into(),
-                        opencode_filter: None,
-                        discovery_cwd: None,
-                    },
-                    self.settings.clone(),
-                    self.log.clone(),
-                )));
-            }
+            let exe = resolve_runtime_executable("hermes", &["hermes"], s.hermes_path.as_deref());
+            push_acp(&mut next, &self.settings, &self.log, &s, exe, AcpBase {
+                provider: "hermes",
+                kind: BackendKind::Hermes,
+                label: "Hermes",
+                args: vec!["acp".into()],
+                env: HashMap::new(),
+                auth: Vec::new(),
+                close_session: false,
+                close_force: false,
+                prefix: "hermes.",
+                desc: "Hermes",
+                opencode_filter: None,
+            });
         }
 
         for custom in s.custom_acp_agents.into_iter().filter(|c| c.enabled && !c.command.trim().is_empty()) {

@@ -210,6 +210,25 @@ pub struct AntigravityAccountConfig {
     pub managed: bool,
 }
 
+/// Изолированный профиль входа для CLI-провайдера.
+/// profile_dir — корень состояния аккаунта; для Antigravity это geminiDir,
+/// для остальных провайдеров каталог, на который указывает provider-specific HOME/DB переменная.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderAccountConfig {
+    pub id: String,
+    pub label: String,
+    pub profile_dir: String,
+    #[serde(default)]
+    pub app_data_dir: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub managed: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CustomAcpAgentConfig {
@@ -312,6 +331,10 @@ pub struct AppSettings {
     pub enable_antigravity: bool,
     pub antigravity_path: Option<String>,
     pub antigravity_accounts: Vec<AntigravityAccountConfig>,
+    /// Изолированные профили входа по ключу провайдера (devin, codex, grok, ...).
+    /// Antigravity пока дополнительно читает legacy-поле antigravity_accounts.
+    #[serde(default)]
+    pub provider_accounts: HashMap<String, Vec<ProviderAccountConfig>>,
     pub enable_opencode: bool,
     pub opencode_path: Option<String>,
     pub opencode_filter: OpenCodeFilterMode,
@@ -409,6 +432,7 @@ impl Default for AppSettings {
             enable_antigravity: true,
             antigravity_path: None,
             antigravity_accounts: Vec::new(),
+            provider_accounts: HashMap::new(),
             enable_opencode: true,
             opencode_path: None,
             opencode_filter: OpenCodeFilterMode::GoFree,

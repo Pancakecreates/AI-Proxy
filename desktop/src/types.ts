@@ -31,6 +31,16 @@ export interface AntigravityAccountConfig {
   managed: boolean;
 }
 
+export interface ProviderAccountConfig {
+  id: string;
+  label: string;
+  profileDir: string;
+  appDataDir?: string | null;
+  email?: string | null;
+  enabled: boolean;
+  managed: boolean;
+}
+
 export interface CustomAcpAgentConfig {
   id: string;
   name: string;
@@ -88,6 +98,7 @@ export interface AppSettings {
   enableAntigravity: boolean;
   antigravityPath: string | null;
   antigravityAccounts: AntigravityAccountConfig[];
+  providerAccounts: Record<string, ProviderAccountConfig[]>;
   enableOpencode: boolean;
   opencodePath: string | null;
   opencodeFilter: OpenCodeFilterMode;

@@ -1,4 +1,5 @@
 mod acp_client;
+mod accounts;
 mod cancel;
 mod codex_client;
 mod commands;
@@ -330,6 +331,7 @@ pub fn run() {
             commands::download_provider_runtime,
             commands::get_accounts_and_quotas,
             commands::add_antigravity_account,
+            commands::add_provider_account,
             commands::login_provider_account,
             commands::remove_or_logout_account,
             commands::query_request_logs,

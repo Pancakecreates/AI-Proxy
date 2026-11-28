@@ -50,6 +50,10 @@ struct TurnState {
 
 pub struct CodexBackend {
     pub executable: String,
+    pub key: String,
+    pub label: String,
+    pub qualified_prefix: String,
+    pub env_overrides: HashMap<String, Option<String>>,
     settings: Arc<RwLock<AppSettings>>,
     log: LogFn,
     proc_state: Arc<Mutex<CodexInner>>,
@@ -118,8 +122,24 @@ fn describe_codex_tool(item: &Value) -> String {
 
 impl CodexBackend {
     pub fn new(executable: String, settings: Arc<RwLock<AppSettings>>, log: LogFn) -> Arc<Self> {
+        Self::new_with_profile(executable, "codex".into(), "Codex".into(), "codex.".into(), HashMap::new(), settings, log)
+    }
+
+    pub fn new_with_profile(
+        executable: String,
+        key: String,
+        label: String,
+        qualified_prefix: String,
+        env_overrides: HashMap<String, Option<String>>,
+        settings: Arc<RwLock<AppSettings>>,
+        log: LogFn,
+    ) -> Arc<Self> {
         Arc::new(Self {
             executable,
+            key,
+            label,
+            qualified_prefix,
+            env_overrides,
             settings,
             log,
             proc_state: Arc::new(Mutex::new(CodexInner {
@@ -176,13 +196,23 @@ impl CodexBackend {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        for (k, v_opt) in &self.env_overrides {
+            match v_opt {
+                Some(v) => {
+                    cmd.env(k, v);
+                }
+                None => {
+                    cmd.env_remove(k);
+                }
+            }
+        }
         {
             let proxy = {
                 let s = self.settings.read().await;
                 crate::net::resolve_provider_proxy("codex", &s.provider_proxies, s.proxy_url.as_deref())
                     .map(str::to_string)
             };
-            crate::net::apply_proxy_env(&mut cmd, proxy.as_deref(), &std::collections::HashMap::new());
+            crate::net::apply_proxy_env(&mut cmd, proxy.as_deref(), &self.env_overrides);
         }
         #[cfg(target_os = "windows")]
         {
@@ -633,7 +663,7 @@ impl CodexBackend {
             .await
             .iter()
             .map(|m| {
-                let qid = format!("codex.{}", m.id);
+                let qid = format!("{}{}", self.qualified_prefix, m.id);
                 BackendModelEntry {
                     id: qid.clone(),
                     name: m.name.clone(),
@@ -641,9 +671,9 @@ impl CodexBackend {
                     gateway_id: to_gateway_model_id(&qid, true),
                     supports_images: m.supports_images,
                     description: format!("ChatGPT: {}", m.id).chars().take(100).collect(),
-                    backend_key: "codex".to_string(),
+                    backend_key: self.key.clone(),
                     backend_kind: BackendKind::Codex,
-                    backend_label: "Codex".to_string(),
+                    backend_label: self.label.clone(),
                     native_id: m.id.clone(),
                     qualified_id: qid,
                     brand: "openai".to_string(),
@@ -659,9 +689,9 @@ impl CodexBackend {
 
     pub async fn get_status(&self) -> BackendHealthStatus {
         BackendHealthStatus {
-            key: "codex".to_string(),
+            key: self.key.clone(),
             kind: BackendKind::Codex,
-            label: "Codex".to_string(),
+            label: self.label.clone(),
             ready: self.is_ready().await,
             models_count: self.models.read().await.len(),
             active_sessions: self.active_session_count().await,

@@ -698,7 +698,7 @@ impl AcpBackend {
                     m.name.clone()
                 };
 
-                let gateway_id = if self.cfg.kind == BackendKind::Devin {
+                let gateway_id = if self.cfg.kind == BackendKind::Devin && self.cfg.qualified_prefix.is_empty() {
                     to_gateway_model_id(&m.id, false)
                 } else {
                     to_gateway_model_id(&qualified_id, true)

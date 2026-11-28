@@ -13,6 +13,7 @@ use crate::router::BackendRouter;
 use crate::runtime_installer::install_provider_runtime;
 use crate::types::{
     AccountQuotaReport, AntigravityAccountConfig, AppLogEntry, AppSettings, BackendModelEntry,
+    ProviderAccountConfig,
     ChatMessageRecord, ChatSummary, DetectedRuntimes, NormalizedMessage, ProxyRuntimeStatus,
     RequestLogEntry, UnifiedTurnRequest, UsageSummary,
 };
@@ -310,6 +311,62 @@ pub async fn download_provider_runtime(
     Ok(path)
 }
 
+
+pub const ACCOUNT_PROVIDERS: &[&str] = &[
+    "devin", "antigravity", "opencode", "grok", "codex", "copilot", "cursor", "cline", "mistral", "kimi", "hermes",
+];
+
+fn resolve_provider_exe(s: &AppSettings, provider: &str) -> Option<String> {
+    match provider {
+        "devin" => resolve_runtime_executable("devin", &["devin"], s.devin_path.as_deref()),
+        "antigravity" => resolve_runtime_executable("antigravity", &["antigravity"], s.antigravity_path.as_deref()),
+        "opencode" => resolve_runtime_executable("opencode", &["opencode"], s.opencode_path.as_deref()),
+        "grok" => resolve_runtime_executable("grok", &["grok"], s.grok_path.as_deref()),
+        "codex" => resolve_runtime_executable("codex", &["codex"], s.codex_path.as_deref()),
+        "copilot" => resolve_runtime_executable("copilot", &["copilot"], s.copilot_path.as_deref()),
+        "cursor" => resolve_runtime_executable("cursor", &["cursor-agent", "agent"], s.cursor_path.as_deref()),
+        "cline" => resolve_runtime_executable("cline", &["cline"], s.cline_path.as_deref()),
+        "mistral" => resolve_runtime_executable("mistral", &["vibe-acp", "vibe"], s.mistral_path.as_deref()),
+        "kimi" => resolve_runtime_executable("kimi", &["kimi"], s.kimi_path.as_deref()),
+        "hermes" => resolve_runtime_executable("hermes", &["hermes"], s.hermes_path.as_deref()),
+        _ => None,
+    }
+}
+
+fn find_provider_account<'a>(s: &'a AppSettings, provider: &str, account_id: Option<&str>) -> Option<crate::types::ProviderAccountConfig> {
+    let aid = account_id?;
+    crate::accounts::accounts_for_provider(s, provider)
+        .into_iter()
+        .find(|a| a.id == aid)
+}
+
+fn account_login_envs(acc: Option<&crate::types::ProviderAccountConfig>, provider: &str) -> Vec<(String, String)> {
+    let Some(acc) = acc else { return Vec::new() };
+    if provider == "antigravity" {
+        return Vec::new();
+    }
+    crate::accounts::profile_env_overrides(provider, acc)
+        .into_iter()
+        .filter_map(|(k, v)| v.map(|val| (k, val)))
+        .collect()
+}
+
+fn account_profile_signed_in(provider: &str, acc: &crate::types::ProviderAccountConfig) -> bool {
+    let dir = Path::new(&acc.profile_dir);
+    if !dir.is_dir() {
+        return false;
+    }
+    match provider {
+        "antigravity" => {
+            let app_data = acc.app_data_dir.clone().unwrap_or_else(|| "antigravity-acp".into());
+            dir.join(app_data).join("antigravity-oauth-token").is_file()
+        }
+        "codex" => dir.join("auth.json").is_file(),
+        "opencode" => dir.join("opencode.db").is_file(),
+        _ => std::fs::read_dir(dir).map(|mut it| it.next().is_some()).unwrap_or(false),
+    }
+}
+
 #[tauri::command]
 pub async fn get_accounts_and_quotas(state: State<'_, Arc<AppState>>) -> Result<Vec<AccountQuotaReport>, String> {
     let s = state.settings.read().await.clone();
@@ -347,6 +404,31 @@ pub async fn get_accounts_and_quotas(state: State<'_, Arc<AppState>>) -> Result<
             verification_url: None,
             checked_at: Utc::now().to_rfc3339(),
         });
+    }
+
+    // Per-account reports for providers with configured profile accounts.
+    for prov in ACCOUNT_PROVIDERS {
+        if *prov == "antigravity" {
+            continue;
+        }
+        for acc in crate::accounts::accounts_for_provider(&s, prov) {
+            let key = format!("{prov}:{}", acc.id);
+            if reports.iter().any(|r| r.account_key == key) {
+                continue;
+            }
+let email = acc.email.clone();
+            reports.push(AccountQuotaReport {
+                account_key: key,
+                provider: prov.to_string(),
+                label: format!("{} ({})", prov, acc.label),
+                email,
+                signed_in: account_profile_signed_in(prov, &acc),
+                windows: Vec::new(),
+                error: None,
+                verification_url: None,
+                checked_at: Utc::now().to_rfc3339(),
+            });
+        }
     }
 
     Ok(reports)
@@ -401,6 +483,51 @@ pub async fn add_antigravity_account(
 }
 
 #[tauri::command]
+pub async fn add_provider_account(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    provider: String,
+    label: Option<String>,
+) -> Result<ProviderAccountConfig, String> {
+    if !ACCOUNT_PROVIDERS.contains(&provider.as_str()) {
+        return Err(format!("Мультиаккаунты для «{provider}» не поддерживаются"));
+    }
+    let s = state.settings.read().await.clone();
+    resolve_provider_exe(&s, &provider)
+        .ok_or_else(|| format!("CLI {provider} не найден — сначала скачайте или укажите путь"))?;
+
+    let short_id = format!("{}-{}", &provider[..3.min(provider.len())], &uuid::Uuid::new_v4().simple().to_string()[..6]);
+    let dir = app_managed_accounts_dir().join(&provider).join(&short_id);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+
+    let count = crate::accounts::accounts_for_provider(&s, &provider).len();
+    let acc = ProviderAccountConfig {
+        id: short_id,
+        label: label
+            .filter(|l| !l.trim().is_empty())
+            .unwrap_or_else(|| format!("Account {}", count + 1)),
+        profile_dir: dir.to_string_lossy().to_string(),
+        app_data_dir: if provider == "antigravity" { Some("antigravity-acp".into()) } else { None },
+        email: None,
+        enabled: true,
+        managed: true,
+    };
+    crate::accounts::prepare_profile_dirs(&provider, &acc)?;
+
+    let mut updated = state.settings.read().await.clone();
+    updated
+        .provider_accounts
+        .entry(provider.clone())
+        .or_default()
+        .push(acc.clone());
+    state.db.save_settings(&updated)?;
+    *state.settings.write().await = updated;
+    state.router.rebuild_backends().await;
+    let _ = app.emit("proxy-status-updated", &state.runtime_status().await);
+    Ok(acc)
+}
+
+#[tauri::command]
 pub async fn login_provider_account(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
@@ -408,82 +535,82 @@ pub async fn login_provider_account(
     account_id: Option<String>,
 ) -> Result<String, String> {
     let s = state.settings.read().await.clone();
+    let acc = find_provider_account(&s, &provider, account_id.as_deref());
+    if account_id.is_some() && acc.is_none() {
+        return Err(format!("Аккаунт {provider} не найден"));
+    }
+    let extra = account_login_envs(acc.as_ref(), &provider);
+    let extra_refs: Vec<(&str, &str)> = extra.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    fn with_extra<'a>(base: &[(&'a str, &'a str)], extra: &[(&'a str, &'a str)]) -> Vec<(&'a str, &'a str)> {
+        let mut v: Vec<(&'a str, &'a str)> = base.to_vec();
+        v.extend_from_slice(extra);
+        v
+    }
+
     let msg = match provider.as_str() {
         "antigravity" => {
-            let exe = resolve_runtime_executable("antigravity", &["antigravity"], s.antigravity_path.as_deref())
+            let exe = resolve_provider_exe(&s, "antigravity")
                 .ok_or("Antigravity CLI не установлен")?;
-            let accounts = crate::discovery::merge_antigravity_accounts(&s.antigravity_accounts);
-            let acc = accounts
-                .iter()
-                .find(|a| Some(&a.id) == account_id.as_ref())
-                .ok_or("Аккаунт Antigravity не найден")?;
+            let acc = acc.ok_or("Сначала добавьте аккаунт Antigravity")?;
+            let app_data = acc.app_data_dir.clone().unwrap_or_else(|| "antigravity-acp".into());
             let args = vec![
                 "acp".to_string(),
-                format!("--gemini-dir={}", acc.gemini_dir),
-                format!("--app-data-dir={}", acc.app_data_dir),
+                format!("--gemini-dir={}", acc.profile_dir),
+                format!("--app-data-dir={app_data}"),
             ];
             run_acp_authenticate(
                 &exe,
                 &args,
-                &[("WSL_DISTRO_NAME", "OpenBot"), ("ANTIGRAVITY_CLI_NO_AUTO_UPDATE", "1")],
+                &with_extra(&[("WSL_DISTRO_NAME", "OpenBot"), ("ANTIGRAVITY_CLI_NO_AUTO_UPDATE", "1")], &extra_refs),
                 "oauth-personal",
             )
             .await?
         }
         "devin" => {
-            let exe = resolve_runtime_executable("devin", &["devin"], s.devin_path.as_deref())
-                .ok_or("Devin CLI не установлен")?;
-            run_acp_authenticate(&exe, &["acp".into()], &[], "devin-browser").await?
+            let exe = resolve_provider_exe(&s, "devin").ok_or("Devin CLI не установлен")?;
+            run_acp_authenticate(&exe, &["acp".into()], &with_extra(&[], &extra_refs), "devin-browser").await?
         }
         "mistral" => {
-            let exe = resolve_runtime_executable("mistral", &["vibe-acp", "vibe"], s.mistral_path.as_deref())
-                .ok_or("Mistral Vibe CLI не установлен")?;
-            run_acp_authenticate(&exe, &[], &[], "browser-auth").await?
+            let exe = resolve_provider_exe(&s, "mistral").ok_or("Mistral Vibe CLI не установлен")?;
+            run_acp_authenticate(&exe, &[], &with_extra(&[], &extra_refs), "browser-auth").await?
         }
         "cline" => {
-            let exe = resolve_runtime_executable("cline", &["cline"], s.cline_path.as_deref())
-                .ok_or("Cline CLI не установлен")?;
-            run_acp_authenticate(&exe, &["--acp".into()], &[("CLINE_SESSION_BACKEND_MODE", "local")], "cline").await?
+            let exe = resolve_provider_exe(&s, "cline").ok_or("Cline CLI не установлен")?;
+            run_acp_authenticate(&exe, &["--acp".into()], &with_extra(&[("CLINE_SESSION_BACKEND_MODE", "local")], &extra_refs), "cline").await?
         }
         "codex" => {
-            let exe = resolve_runtime_executable("codex", &["codex"], s.codex_path.as_deref())
-                .ok_or("Codex CLI не установлен")?;
-            run_cli_login_interactive(&exe, &["login".into()], &[], || {
+            let exe = resolve_provider_exe(&s, "codex").ok_or("Codex CLI не установлен")?;
+            run_cli_login_interactive(&exe, &["login".into()], &with_extra(&[], &extra_refs), || {
                 check_simple_auth_status(&s).get("codex").copied().unwrap_or(false)
             }).await?
         }
         "grok" => {
-            let exe = resolve_runtime_executable("grok", &["grok"], s.grok_path.as_deref())
-                .ok_or("Grok CLI не установлен")?;
+            let exe = resolve_provider_exe(&s, "grok").ok_or("Grok CLI не установлен")?;
             run_cli_login_interactive(
                 &exe,
                 &["--no-auto-update".into(), "login".into()],
-                &[("GROK_OAUTH2_REFERRER", "openbot")],
+                &with_extra(&[("GROK_OAUTH2_REFERRER", "openbot")], &extra_refs),
                 || check_simple_auth_status(&s).get("grok").copied().unwrap_or(false),
             )
             .await?
         }
         "copilot" => {
-            let exe = resolve_runtime_executable("copilot", &["copilot"], s.copilot_path.as_deref())
-                .ok_or("Copilot CLI не установлен")?;
-            run_cli_login_interactive(&exe, &["login".into()], &[], || {
+            let exe = resolve_provider_exe(&s, "copilot").ok_or("Copilot CLI не установлен")?;
+            run_cli_login_interactive(&exe, &["login".into()], &with_extra(&[], &extra_refs), || {
                 check_simple_auth_status(&s).get("copilot").copied().unwrap_or(false)
             }).await?
         }
         "opencode" => {
-            let exe = resolve_runtime_executable("opencode", &["opencode"], s.opencode_path.as_deref())
-                .ok_or("OpenCode CLI не установлен")?;
-            run_cli_login_command(&exe, &["auth".into(), "login".into()], &[]).await?
+            let exe = resolve_provider_exe(&s, "opencode").ok_or("OpenCode CLI не установлен")?;
+            run_cli_login_command(&exe, &["auth".into(), "login".into()], &with_extra(&[], &extra_refs)).await?
         }
         "kimi" => {
-            let exe = resolve_runtime_executable("kimi", &["kimi"], s.kimi_path.as_deref())
-                .ok_or("Kimi CLI не установлен")?;
-            run_cli_login_command(&exe, &["login".into()], &[]).await?
+            let exe = resolve_provider_exe(&s, "kimi").ok_or("Kimi CLI не установлен")?;
+            run_cli_login_command(&exe, &["login".into()], &with_extra(&[], &extra_refs)).await?
         }
         "hermes" => {
-            let exe = resolve_runtime_executable("hermes", &["hermes"], s.hermes_path.as_deref())
-                .ok_or("Hermes CLI не установлен")?;
-            run_cli_login_command(&exe, &["auth".into(), "add".into(), "nous".into(), "--type".into(), "oauth".into()], &[]).await?
+            let exe = resolve_provider_exe(&s, "hermes").ok_or("Hermes CLI не установлен")?;
+            run_cli_login_command(&exe, &["auth".into(), "add".into(), "nous".into(), "--type".into(), "oauth".into()], &with_extra(&[], &extra_refs)).await?
         }
         other => return Err(format!("Вход для \"{other}\" не поддерживается")),
     };
@@ -502,11 +629,11 @@ pub async fn remove_or_logout_account(
     delete_files: bool,
 ) -> Result<(), String> {
     let mut s = state.settings.read().await.clone();
-    match provider.as_str() {
-        "antigravity" => {
-            let Some(aid) = account_id else {
-                return Err("Не указан accountId".into());
-            };
+
+    // Generic profile-account removal (any provider with configured accounts).
+    if let Some(aid) = account_id.clone() {
+        let acc = find_provider_account(&s, &provider, Some(&aid));
+        if provider == "antigravity" {
             let mut merged = crate::discovery::merge_antigravity_accounts(&s.antigravity_accounts);
             if let Some(pos) = merged.iter().position(|a| a.id == aid) {
                 let removed = merged.remove(pos);
@@ -519,21 +646,37 @@ pub async fn remove_or_logout_account(
                 }
             }
             s.antigravity_accounts = merged;
+        }
+        if let Some(list) = s.provider_accounts.get_mut(&provider) {
+            if let Some(pos) = list.iter().position(|a| a.id == aid) {
+                let removed = list.remove(pos);
+                if delete_files && removed.managed {
+                    let _ = std::fs::remove_dir_all(&removed.profile_dir);
+                }
+            }
+        }
+        if acc.is_some() || provider == "antigravity" {
             state.db.save_settings(&s)?;
             *state.settings.write().await = s;
+            state.router.rebuild_backends().await;
+            let _ = app.emit("proxy-status-updated", &state.runtime_status().await);
+            return Ok(());
         }
+    }
+
+    match provider.as_str() {
         "codex" => {
-            if let Some(exe) = resolve_runtime_executable("codex", &["codex"], s.codex_path.as_deref()) {
+            if let Some(exe) = resolve_provider_exe(&s, "codex") {
                 let _ = run_cli_login_command(&exe, &["logout".into()], &[]).await;
             }
         }
         "devin" => {
-            if let Some(exe) = resolve_runtime_executable("devin", &["devin"], s.devin_path.as_deref()) {
+            if let Some(exe) = resolve_provider_exe(&s, "devin") {
                 let _ = run_cli_login_command(&exe, &["auth".into(), "logout".into()], &[]).await;
             }
         }
         "grok" => {
-            if let Some(exe) = resolve_runtime_executable("grok", &["grok"], s.grok_path.as_deref()) {
+            if let Some(exe) = resolve_provider_exe(&s, "grok") {
                 let _ = run_cli_login_command(&exe, &["--no-auto-update".into(), "logout".into()], &[]).await;
             }
         }

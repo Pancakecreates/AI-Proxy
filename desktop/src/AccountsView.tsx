@@ -132,12 +132,13 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
     }
   };
 
-  const handleAddAgyAccount = async () => {
-    setBusyKey("add-agy");
+  const handleAddAccount = async (provider: string) => {
+    setBusyKey(`add-${provider}`);
     setFeedback(null);
     try {
-      const acc = await invoke("add_antigravity_account", { label: null });
-      setFeedback({ kind: "ok", text: t("Добавлен аккаунт Antigravity: {label}", { label: (acc as { label: string }).label }) });
+      const acc = (await invoke("add_provider_account", { provider, label: null })) as { id: string; label: string };
+      setFeedback({ kind: "ok", text: t("Добавлен аккаунт {provider}: {label}", { provider, label: acc.label }) });
+      await handleLogin(provider, acc.id);
       onRefreshAll();
       await loadQuotas();
     } catch (e) {
@@ -145,6 +146,26 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
     } finally {
       setBusyKey(null);
     }
+  };
+
+  const accountsForProvider = (key: string): { id: string; label: string; email?: string | null; managed: boolean; dir: string }[] => {
+    const generic = (settings.providerAccounts?.[key] ?? []).map((a) => ({
+      id: a.id,
+      label: a.label,
+      email: a.email,
+      managed: a.managed,
+      dir: a.profileDir,
+    }));
+    if (key !== "antigravity") return generic;
+    const legacy = (runtimes?.antigravityAccounts ?? settings.antigravityAccounts).map((a) => ({
+      id: a.id,
+      label: a.label,
+      email: a.email,
+      managed: a.managed,
+      dir: a.geminiDir,
+    }));
+    const ids = new Set(generic.map((a) => a.id));
+    return [...generic, ...legacy.filter((a) => !ids.has(a.id))];
   };
 
   const handleRemoveOrLogout = async (provider: string, accountId?: string, deleteFiles = false) => {
@@ -234,10 +255,6 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
           title={t("Аккаунты и CLI")}
           description={t("Вход в аккаунты внутри приложения, квоты и автоустановка недостающих движков ACP и CLI.")}
         >
-          <Button variant="primary" size="sm" onClick={handleAddAgyAccount} disabled={busyKey !== null}>
-            <Plus className="size-3.5" />
-            <span>{t("Добавить Antigravity")}</span>
-          </Button>
           <Button variant="secondary" size="sm" onClick={() => loadQuotas()} disabled={loadingQuotas}>
             <RefreshCw className={`size-3.5 ${loadingQuotas ? "animate-spin" : ""}`} />
             <span>{t("Проверить лимиты")}</span>
@@ -436,10 +453,8 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
               const prog = installProgress[p.key];
               const isBusy = busyKey === `dl-${p.key}` || busyKey === `login-${p.key}-`;
               return (
-                <div
-                  key={p.key}
-                  className="flex flex-wrap items-center justify-between gap-3 px-4 py-[var(--density-cell-y)] transition-colors hover:bg-[var(--bg-subtle)]"
-                >
+                <div key={p.key} className="transition-colors hover:bg-[var(--bg-subtle)]">
+                <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-[var(--density-cell-y)]">
                   <div className="flex min-w-0 items-center gap-2.5">
                     <BrandIcon brand={p.brand} size={18} />
                     <div className="min-w-0">
@@ -477,7 +492,21 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                       </Button>
                     )}
 
-                    {exe && ["devin", "grok", "codex"].includes(p.key) && (
+                    {exe && p.loginable && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => handleAddAccount(p.key)}
+                        disabled={busyKey !== null}
+                        title={t("Добавить аккаунт")}
+                        aria-label={t("Добавить аккаунт")}
+                        className="size-6 text-[var(--fg-subtle)] hover:text-[var(--accent)]"
+                      >
+                        <Plus className="size-3.5" />
+                      </Button>
+                    )}
+
+                    {exe && ["devin", "grok", "codex"].includes(p.key) && accountsForProvider(p.key).length === 0 && (
                       <Button
                         variant="ghost"
                         size="icon"
@@ -498,6 +527,49 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                       />
                     </div>
                   </div>
+                </div>
+
+                {accountsForProvider(p.key).map((acc, ai) => {
+                  const quota = quotas.find((q) => q.accountKey === `${p.key}:${acc.id}`);
+                  const busy = busyKey === `login-${p.key}-${acc.id}` || busyKey === `out-${p.key}-${acc.id}`;
+                  return (
+                    <div key={acc.id} className="flex items-center justify-between gap-3 border-t border-[var(--border)]/60 py-1.5 pl-11 pr-4">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span className="w-3.5 shrink-0 text-[10px] tabular-nums text-[var(--fg-subtle)]">{ai + 1}</span>
+                        <div className="min-w-0">
+                          <div className="truncate text-[11.5px] font-medium text-[var(--fg)]">
+                            {quota?.email || acc.email || acc.label}
+                          </div>
+                          <div className="truncate text-[10.5px] text-[var(--fg-subtle)]">
+                            {quota?.signedIn ? t("Вход выполнен") : t("Ожидает входа")}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1">
+                        <Button
+                          variant="ghost"
+                          size="xs"
+                          onClick={() => handleLogin(p.key, acc.id)}
+                          disabled={busyKey !== null}
+                        >
+                          <LogIn className="size-3" />
+                          <span>{busy ? t("Вход…") : quota?.signedIn ? t("Обновить") : t("Войти")}</span>
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => handleRemoveOrLogout(p.key, acc.id, acc.managed)}
+                          disabled={busyKey !== null}
+                          title={t("Удалить аккаунт")}
+                          aria-label={t("Удалить аккаунт")}
+                          className="size-6 text-[var(--fg-subtle)] hover:text-[var(--danger)]"
+                        >
+                          <Trash2 className="size-3" />
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })}
                 </div>
               );
             })}
