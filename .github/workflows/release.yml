@@ -6,7 +6,7 @@ on:
       version:
         description: "Release version (e.g. 0.2.0, used directly as Release Title)"
         required: true
-        default: "0.2.0"
+        default: "0.3.1"
         type: string
       notes:
         description: "Additional release notes (write in English)"
@@ -68,10 +68,10 @@ jobs:
 
           ### Included
           - Dual gateway: Anthropic (`/v1/messages`, `/v1/models`) and OpenAI/Codex (`/v1/chat/completions`, `/v1/responses`, `/v1/models`)
-          - Built-in authentication, Antigravity multi-account support, and live limits/quota inspection
+          - Built-in authentication, multi-account profiles for every CLI provider, and live limits/quota inspection
           - Automatic installation of missing CLI runtimes, SQLite-backed playground chats, detailed logs, and token/cost tracking
           - Built-in update checks and installation from GitHub Releases
-          - Installers: Windows (`.exe` NSIS / `.msi`), macOS (Universal `.dmg`), Linux (`.AppImage` / `.deb`)
+          - Installers: Windows (custom `.exe` setup), macOS (Universal `.dmg`), Linux (`.AppImage` / `.deb` / `.rpm`)
           RELEASE_BODY
           if [ -n "$INPUT_NOTES" ]; then
             printf '\n%s\n' "$INPUT_NOTES" >> "$BODY_FILE"
@@ -191,9 +191,9 @@ jobs:
 
             ### Included
             - Dual gateway: Anthropic (`/v1/messages`, `/v1/models`) and OpenAI/Codex (`/v1/chat/completions`, `/v1/responses`, `/v1/models`)
-            - Built-in authentication, Antigravity multi-account support, and live limits/quota inspection
+            - Built-in authentication, multi-account profiles for every CLI provider, and live limits/quota inspection
             - Automatic installation of missing CLI runtimes, local SQLite playground chats, detailed logs, and token/cost tracking
-            - Installers: Windows (`.exe` NSIS / `.msi`), macOS (Universal `.dmg`), Linux (`.AppImage` / `.deb`)
+            - Installers: Windows (custom `.exe` setup), macOS (Universal `.dmg`), Linux (`.AppImage` / `.deb` / `.rpm`)
 
             ${{ inputs.notes }}
           releaseDraft: false
