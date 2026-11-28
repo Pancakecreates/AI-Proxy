@@ -289,7 +289,7 @@ fn state_from_download(dl: &DownloadedUpdate, percent: f64, message: impl Into<S
 
 pub async fn get_update_download_state() -> Option<UpdateDownloadState> {
     let slot = downloaded_slot().lock().await;
-    slot.as_ref().map(|dl| {
+    slot.as_ref().filter(|dl| dl.path.exists()).map(|dl| {
         state_from_download(dl, 100.0, format!("Версия {} готова к установке", dl.version))
     })
 }
@@ -390,7 +390,7 @@ pub async fn download_update(
         file.flush().map_err(|e| format!("Ошибка записи файла: {e}"))?;
         drop(file);
 
-        if total > 0 && downloaded != total {
+        if total > 0 && downloaded < total {
             return Err(format!(
                 "Файл скачан не полностью: {downloaded} из {total} байт"
             ));

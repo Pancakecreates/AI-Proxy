@@ -265,7 +265,11 @@ pub async fn fetch_devin_plan(settings: &AppSettings) -> AccountQuotaReport {
 
     if let Some(value) = tier.or(plan) {
         report.signed_in = true;
-        report.label = format!("Devin · {value}");
+        report.label = if value.to_lowercase().starts_with("devin") {
+            value
+        } else {
+            format!("Devin · {value}")
+        };
         report.error = Some("CLI не отдаёт остаток лимитов — показан только тариф аккаунта.".to_string());
     } else if report.signed_in {
         report.error = Some("CLI не отдаёт остаток лимитов.".to_string());
