@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_opener::OpenerExt;
 
@@ -32,6 +33,36 @@ pub struct UpdateDownloadProgress {
     pub total: u64,
     pub percent: f64,
     pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateDownloadState {
+    pub version: String,
+    pub ready: bool,
+    pub downloading: bool,
+    pub percent: f64,
+    pub message: String,
+    pub path: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct DownloadedUpdate {
+    version: String,
+    path: PathBuf,
+    asset_name: String,
+}
+
+static DOWNLOADED_UPDATE: OnceLock<tokio::sync::Mutex<Option<DownloadedUpdate>>> = OnceLock::new();
+static DOWNLOAD_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+
+fn downloaded_slot() -> &'static tokio::sync::Mutex<Option<DownloadedUpdate>> {
+    DOWNLOADED_UPDATE.get_or_init(|| tokio::sync::Mutex::new(None))
+}
+
+fn download_lock() -> &'static tokio::sync::Mutex<()> {
+    DOWNLOAD_LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
 }
 
 fn parse_semver_tuple(raw: &str) -> (u64, u64, u64, bool) {
@@ -244,108 +275,209 @@ fn spawn_windows_silent_updater(installer_path: &PathBuf) -> Result<(), String> 
     Ok(())
 }
 
-pub async fn download_and_launch_update(
+fn state_from_download(dl: &DownloadedUpdate, percent: f64, message: impl Into<String>) -> UpdateDownloadState {
+    UpdateDownloadState {
+        version: dl.version.clone(),
+        ready: true,
+        downloading: false,
+        percent,
+        message: message.into(),
+        path: Some(dl.path.to_string_lossy().to_string()),
+        error: None,
+    }
+}
+
+pub async fn get_update_download_state() -> Option<UpdateDownloadState> {
+    let slot = downloaded_slot().lock().await;
+    slot.as_ref().map(|dl| {
+        state_from_download(dl, 100.0, format!("Версия {} готова к установке", dl.version))
+    })
+}
+
+/// Downloads the installer without touching the running app. The UI shows a
+/// restart action only once this finishes, so pressing "update" never yanks
+/// the window away mid-download.
+pub async fn download_update(
     app: &AppHandle,
     asset_url: Option<String>,
     asset_name: Option<String>,
     release_url: String,
-) -> Result<(String, bool), String> {
+    version: String,
+) -> Result<UpdateDownloadState, String> {
     let Some(url) = asset_url.filter(|u| !u.trim().is_empty()) else {
         app.opener()
             .open_url(&release_url, None::<&str>)
             .map_err(|e| e.to_string())?;
-        return Ok(("Открыта страница релиза в браузере".to_string(), false));
+        return Ok(UpdateDownloadState {
+            version,
+            ready: false,
+            downloading: false,
+            percent: 0.0,
+            message: "Для этой платформы нет файла обновления — открыта страница релиза".to_string(),
+            path: None,
+            error: None,
+        });
     };
+
+    let _guard = download_lock().lock().await;
+
+    {
+        let slot = downloaded_slot().lock().await;
+        if let Some(dl) = slot.as_ref() {
+            if dl.version == version && dl.path.exists() {
+                return Ok(state_from_download(dl, 100.0, format!("Версия {} готова к установке", dl.version)));
+            }
+        }
+    }
 
     let filename = asset_name
         .filter(|n| !n.trim().is_empty())
         .unwrap_or_else(|| "ai-proxy-update-installer.exe".to_string());
 
+    let safe_version: String = version
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '_' })
+        .collect();
     let target_dir: PathBuf = app
         .path()
         .temp_dir()
         .unwrap_or_else(|_| std::env::temp_dir())
-        .join("ai-proxy-updates");
+        .join("ai-proxy-updates")
+        .join(if safe_version.is_empty() { "latest".to_string() } else { safe_version });
     fs::create_dir_all(&target_dir).map_err(|e| e.to_string())?;
     let target_path = target_dir.join(&filename);
     let part_path = target_dir.join(format!("{filename}.part"));
 
     emit_progress(app, "downloading", 0, 0, "Подключение к GitHub Releases...");
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(300))
-        .user_agent("AI-Proxy-Desktop")
-        .build()
-        .map_err(|e| e.to_string())?;
+    let result: Result<(), String> = async {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(300))
+            .user_agent("AI-Proxy-Desktop")
+            .build()
+            .map_err(|e| e.to_string())?;
 
-    let resp = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| format!("Ошибка загрузки установщика: {e}"))?
-        .error_for_status()
-        .map_err(|e| format!("Ошибка сервера при загрузке: {e}"))?;
+        let resp = client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Ошибка загрузки установщика: {e}"))?
+            .error_for_status()
+            .map_err(|e| format!("Ошибка сервера при загрузке: {e}"))?;
 
-    let total = resp.content_length().unwrap_or(0);
-    let mut stream = resp.bytes_stream();
-    let mut file = File::create(&part_path).map_err(|e| format!("Ошибка создания файла: {e}"))?;
-    let mut downloaded: u64 = 0;
-    let mut last_emitted: u64 = 0;
+        let total = resp.content_length().unwrap_or(0);
+        let mut stream = resp.bytes_stream();
+        let mut file = File::create(&part_path).map_err(|e| format!("Ошибка создания файла: {e}"))?;
+        let mut downloaded: u64 = 0;
+        let mut last_emitted: u64 = 0;
 
-    while let Some(chunk) = stream.next().await {
-        let bytes = chunk.map_err(|e| format!("Ошибка скачивания: {e}"))?;
-        file.write_all(&bytes)
-            .map_err(|e| format!("Ошибка записи файла: {e}"))?;
-        downloaded += bytes.len() as u64;
-        if downloaded - last_emitted >= 65_536 || (total > 0 && downloaded >= total) {
-            last_emitted = downloaded;
-            let mb = downloaded as f64 / 1_048_576.0;
-            let msg = if total > 0 {
-                format!("Загрузка {mb:.1} из {:.1} МБ", total as f64 / 1_048_576.0)
-            } else {
-                format!("Загружено {mb:.1} МБ")
-            };
-            emit_progress(app, "downloading", downloaded, total, msg);
+        while let Some(chunk) = stream.next().await {
+            let bytes = chunk.map_err(|e| format!("Ошибка скачивания: {e}"))?;
+            file.write_all(&bytes)
+                .map_err(|e| format!("Ошибка записи файла: {e}"))?;
+            downloaded += bytes.len() as u64;
+            if downloaded - last_emitted >= 65_536 || (total > 0 && downloaded >= total) {
+                last_emitted = downloaded;
+                let mb = downloaded as f64 / 1_048_576.0;
+                let msg = if total > 0 {
+                    format!("Загрузка {mb:.1} из {:.1} МБ", total as f64 / 1_048_576.0)
+                } else {
+                    format!("Загружено {mb:.1} МБ")
+                };
+                emit_progress(app, "downloading", downloaded, total, msg);
+            }
+        }
+        file.flush().map_err(|e| format!("Ошибка записи файла: {e}"))?;
+        drop(file);
+
+        if total > 0 && downloaded != total {
+            return Err(format!(
+                "Файл скачан не полностью: {downloaded} из {total} байт"
+            ));
+        }
+
+        if target_path.exists() {
+            let _ = fs::remove_file(&target_path);
+        }
+        fs::rename(&part_path, &target_path).map_err(|e| format!("Ошибка сохранения файла: {e}"))?;
+        Ok(())
+    }
+    .await;
+
+    if let Err(err) = result {
+        let _ = fs::remove_file(&part_path);
+        let _ = app.emit(
+            "app-update-progress",
+            UpdateDownloadProgress {
+                phase: "error".to_string(),
+                downloaded: 0,
+                total: 0,
+                percent: 0.0,
+                message: err.clone(),
+            },
+        );
+        return Err(err);
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = fs::metadata(&target_path) {
+            let mut perms = meta.permissions();
+            perms.set_mode(0o755);
+            let _ = fs::set_permissions(&target_path, perms);
         }
     }
-    file.flush().map_err(|e| format!("Ошибка записи файла: {e}"))?;
-    drop(file);
 
-    if target_path.exists() {
-        let _ = fs::remove_file(&target_path);
+    let downloaded_update = DownloadedUpdate {
+        version: version.clone(),
+        path: target_path,
+        asset_name: filename,
+    };
+    let state = state_from_download(
+        &downloaded_update,
+        100.0,
+        format!("Версия {version} скачана и готова к установке"),
+    );
+
+    emit_progress(app, "ready", 1, 1, state.message.clone());
+    *downloaded_slot().lock().await = Some(downloaded_update);
+    Ok(state)
+}
+
+/// Launches the already-downloaded installer. Returns `(message, should_exit)`;
+/// the caller schedules app exit so the installer can replace locked files.
+pub async fn install_downloaded_update(app: &AppHandle) -> Result<(String, bool), String> {
+    let slot = downloaded_slot().lock().await;
+    let Some(dl) = slot.as_ref() else {
+        return Err("Обновление ещё не скачано".to_string());
+    };
+    if !dl.path.exists() {
+        return Err("Файл обновления исчез из временной папки — скачайте его заново".to_string());
     }
-    fs::rename(&part_path, &target_path).map_err(|e| format!("Ошибка сохранения файла: {e}"))?;
 
     #[cfg(target_os = "windows")]
     {
-        emit_progress(
-            app,
-            "installing",
-            total.max(downloaded),
-            total.max(downloaded),
-            "Установка обновления и перезапуск...",
-        );
-        spawn_windows_silent_updater(&target_path)?;
-        return Ok(("Обновление загружено. Перезапуск AI Proxy...".to_string(), true));
+        emit_progress(app, "installing", 1, 1, "Установка обновления и перезапуск...");
+        spawn_windows_silent_updater(&dl.path)?;
+        return Ok((
+            format!(
+                "Установка версии {} ({}) и перезапуск AI Proxy…",
+                dl.version, dl.asset_name
+            ),
+            true,
+        ));
     }
 
     #[cfg(not(target_os = "windows"))]
     {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            if let Ok(meta) = fs::metadata(&target_path) {
-                let mut perms = meta.permissions();
-                perms.set_mode(0o755);
-                let _ = fs::set_permissions(&target_path, perms);
-            }
-        }
-
         app.opener()
-            .open_path(target_path.to_string_lossy().as_ref(), None::<&str>)
-            .map_err(|e| format!("Скачано в {}, но не удалось открыть: {e}", target_path.display()))?;
-
-        Ok((format!("Установщик скачан и запущен: {}", target_path.display()), false))
+            .open_path(dl.path.to_string_lossy().as_ref(), None::<&str>)
+            .map_err(|e| format!("Не удалось открыть {}: {e}", dl.path.display()))?;
+        Ok((
+            format!("Установщик {} открыт: {}", dl.version, dl.asset_name),
+            false,
+        ))
     }
 }
 

@@ -12,7 +12,7 @@
     --nav-active: #efeff1;
     --sidebar-bg: #fafafa;
 
-    --border: #e4e4e7;
+    --border: #e8e8ea;
     --border-strong: #d4d4d8;
 
     --fg: #18181b;
@@ -45,10 +45,11 @@
     --bg-subtle: rgb(255 255 255 / 0.045);
     --bg-hover: rgb(255 255 255 / 0.08);
     --control-active: rgb(255 255 255 / 0.09);
+    --nav-active: rgb(255 255 255 / 0.07);
     --sidebar-bg: #050505;
 
-    --border: rgb(255 255 255 / 0.09);
-    --border-strong: rgb(255 255 255 / 0.16);
+    --border: rgb(255 255 255 / 0.075);
+    --border-strong: rgb(255 255 255 / 0.15);
 
     --fg: #f4f4f5;
     --fg-muted: #a3a3a3;
@@ -324,4 +325,27 @@
 
 html[data-theme="dark"] .brand-ink-invert {
   filter: invert(1) brightness(1.06);
+}
+
+/* Tactile press feedback for every interactive control. Transform is cheap
+   (no layout) and the short timing keeps the UI from feeling sluggish. */
+button,
+[role="button"],
+[role="tab"],
+[role="menuitem"],
+[role="option"] {
+  transition-property: color, background-color, border-color, opacity, filter, box-shadow, transform;
+  transition-duration: 120ms;
+  transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+  transform-origin: center;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  button:not(:disabled):not([data-press="none"]):not([role="switch"]):active,
+  [role="button"]:not([aria-disabled="true"]):not([data-press="none"]):active,
+  [role="tab"]:active,
+  [role="menuitem"]:active,
+  [role="option"]:active {
+    transform: scale(0.97);
+  }
 }

@@ -6,8 +6,8 @@ use crate::http_server::{build_http_router, HttpSharedState};
 use crate::models::normalize_effort_value;
 use crate::pricing::{calculate_costs, estimate_tokens_from_chars};
 use crate::quota::{
-    check_simple_auth_status, fetch_antigravity_quota, fetch_codex_quota, run_acp_authenticate,
-    run_cli_login_command, run_cli_login_interactive,
+    check_simple_auth_status, fetch_antigravity_quota, fetch_codex_quota, fetch_devin_plan,
+    run_acp_authenticate, run_cli_login_command, run_cli_login_interactive,
 };
 use crate::router::BackendRouter;
 use crate::runtime_installer::install_provider_runtime;
@@ -405,13 +405,22 @@ pub async fn get_accounts_and_quotas(state: State<'_, Arc<AppState>>) -> Result<
         reports.push(fetch_codex_quota(&s).await);
     }
 
+    reports.push(fetch_devin_plan(&s).await);
     for (prov, label) in [
-        ("devin", "Devin"),
         ("grok", "Grok (xAI)"),
         ("copilot", "GitHub Copilot"),
         ("mistral", "Mistral Vibe"),
     ] {
         let signed = simple_auth.get(prov).copied().unwrap_or(false);
+        let error = match prov {
+            "grok" => Some(
+                "Grok показывает остаток лимитов только командой /usage внутри CLI.".to_string(),
+            ),
+            "copilot" => Some(
+                "GitHub Copilot не публикует остаток лимитов через CLI.".to_string(),
+            ),
+            _ => None,
+        };
         reports.push(AccountQuotaReport {
             account_key: prov.to_string(),
             provider: prov.to_string(),
@@ -419,7 +428,7 @@ pub async fn get_accounts_and_quotas(state: State<'_, Arc<AppState>>) -> Result<
             email: None,
             signed_in: signed,
             windows: Vec::new(),
-            error: None,
+            error,
             verification_url: None,
             checked_at: Utc::now().to_rfc3339(),
         });
@@ -1027,6 +1036,7 @@ pub async fn quit_app(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result
     if let Some(tray) = app.get_webview_window("tray") {
         let _ = tray.hide();
     }
+    crate::sysproxy::restore_quiet(&app);
     state.stop_proxy_internal().await;
     app.exit(0);
     Ok(())
@@ -1093,21 +1103,52 @@ pub async fn test_proxy_connection(proxy_url: String) -> Result<ProxyTestResult,
 }
 
 #[tauri::command]
+pub fn get_system_proxy_state(app: AppHandle) -> crate::sysproxy::SystemProxyState {
+    crate::sysproxy::get_state(&app)
+}
+
+#[tauri::command]
+pub fn apply_system_proxy(
+    app: AppHandle,
+    proxy_url: String,
+) -> Result<crate::sysproxy::SystemProxyState, String> {
+    crate::sysproxy::apply(&app, &proxy_url)
+}
+
+#[tauri::command]
+pub fn restore_system_proxy(app: AppHandle) -> Result<crate::sysproxy::SystemProxyState, String> {
+    crate::sysproxy::restore(&app)
+}
+
+#[tauri::command]
 pub async fn check_app_update() -> Result<crate::updater::AppUpdateInfo, String> {
     crate::updater::check_for_updates().await
 }
 
 #[tauri::command]
-pub async fn download_and_launch_update(
+pub async fn download_app_update(
     app: AppHandle,
-    state: State<'_, Arc<AppState>>,
     asset_url: Option<String>,
     asset_name: Option<String>,
     release_url: String,
+    version: String,
+) -> Result<crate::updater::UpdateDownloadState, String> {
+    crate::updater::download_update(&app, asset_url, asset_name, release_url, version).await
+}
+
+#[tauri::command]
+pub async fn get_update_download_state() -> Option<crate::updater::UpdateDownloadState> {
+    crate::updater::get_update_download_state().await
+}
+
+#[tauri::command]
+pub async fn install_downloaded_update(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
 ) -> Result<String, String> {
-    let (msg, should_restart) =
-        crate::updater::download_and_launch_update(&app, asset_url, asset_name, release_url).await?;
+    let (msg, should_restart) = crate::updater::install_downloaded_update(&app).await?;
     if should_restart {
+        crate::sysproxy::restore_quiet(&app);
         // Schedule the exit first: a slow or stuck proxy shutdown must never
         // prevent the app from exiting, or the update installer will find
         // locked files. The updater script force-kills us as a last resort.

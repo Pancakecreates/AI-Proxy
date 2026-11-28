@@ -5,7 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
-use tao::dpi::LogicalSize;
+use tao::dpi::{LogicalSize, PhysicalPosition};
 use tao::event::{Event, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
 use tao::window::WindowBuilder;
@@ -200,6 +200,15 @@ fn main() {
         .with_resizable(false)
         .build(&event_loop)
         .expect("build setup window");
+
+    if let Some(monitor) = window.current_monitor() {
+        let screen = monitor.size();
+        let win = window.inner_size();
+        let origin = monitor.position();
+        let x = origin.x + ((screen.width as i32 - win.width as i32) / 2).max(0);
+        let y = origin.y + ((screen.height as i32 - win.height as i32) / 2).max(0);
+        window.set_outer_position(PhysicalPosition::new(x, y));
+    }
 
     let proxy_ipc = proxy.clone();
     let webview_res = WebViewBuilder::new()

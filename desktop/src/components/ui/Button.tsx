@@ -18,7 +18,7 @@ const VARIANT_CLASSES: Record<ButtonVariant, string> = {
   primary:
     "bg-[var(--accent)] text-[var(--accent-fg)] border border-transparent hover:brightness-[1.07]",
   secondary:
-    "bg-[var(--bg-elevated)] text-[var(--fg)] border border-[var(--border)] hover:bg-[var(--bg-subtle)] hover:border-[var(--border-strong)]",
+    "bg-[var(--bg-subtle)] text-[var(--fg)] border border-transparent hover:bg-[var(--bg-hover)]",
   ghost:
     "bg-transparent text-[var(--fg-muted)] border border-transparent hover:bg-[var(--bg-subtle)] hover:text-[var(--fg)]",
   danger:

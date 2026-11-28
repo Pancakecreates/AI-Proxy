@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -19,6 +19,7 @@ import type {
   BackendModelEntry,
   DetectedRuntimes,
   ProxyRuntimeStatus,
+  UpdateDownloadState,
   UsageSummary,
 } from "./types";
 import { TitleBar } from "./TitleBar";
@@ -99,6 +100,8 @@ function AppInner({ onLanguageChange }: { onLanguageChange: (lang: string) => vo
   const [warmingUp, setWarmingUp] = useState(false);
   const [chatPreselectModel, setChatPreselectModel] = useState<string | null>(null);
   const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo | null>(null);
+  const [updateDownload, setUpdateDownload] = useState<UpdateDownloadState | null>(null);
+  const updateStartedFor = useRef<string | null>(null);
   const [appVersion, setAppVersion] = useState<string>("");
 
   const loadAll = async (usageDays = 30) => {
@@ -155,6 +158,94 @@ function AppInner({ onLanguageChange }: { onLanguageChange: (lang: string) => vo
     }, 3000);
     return () => clearTimeout(timer);
   }, [settings?.checkUpdatesOnStart]);
+
+  useEffect(() => {
+    invoke<UpdateDownloadState | null>("get_update_download_state")
+      .then((state) => {
+        if (state) setUpdateDownload(state);
+      })
+      .catch(() => {});
+    const unlisten = listen<{
+      phase: string;
+      percent: number;
+      message: string;
+    }>("app-update-progress", (ev) => {
+      const { phase, percent, message } = ev.payload;
+      setUpdateDownload((prev) => {
+        if (phase === "ready") {
+          return prev ? { ...prev, downloading: false, ready: true, percent: 100, message } : prev;
+        }
+        if (phase === "error") {
+          return prev
+            ? { ...prev, downloading: false, ready: false, error: message, message }
+            : prev;
+        }
+        return {
+          version: prev?.version ?? "",
+          ready: false,
+          downloading: true,
+          percent,
+          message,
+          path: prev?.path ?? null,
+          error: null,
+        };
+      });
+    });
+    return () => {
+      unlisten.then((fn) => fn()).catch(() => {});
+    };
+  }, []);
+
+  const startUpdateDownload = async (info: AppUpdateInfo | null = updateInfo) => {
+    if (!info?.hasUpdate || !info.assetUrl) return;
+    updateStartedFor.current = info.latestVersion;
+    try {
+      const state = await invoke<UpdateDownloadState>("download_app_update", {
+        assetUrl: info.assetUrl,
+        assetName: info.assetName,
+        releaseUrl: info.releaseUrl,
+        version: info.latestVersion,
+      });
+      setUpdateDownload(state);
+    } catch (e) {
+      setUpdateDownload({
+        version: info.latestVersion,
+        ready: false,
+        downloading: false,
+        percent: 0,
+        message: "",
+        path: null,
+        error: String(e),
+      });
+    }
+  };
+
+  useEffect(() => {
+    if (!updateInfo?.hasUpdate || !updateInfo.assetUrl) return;
+    if (updateDownload?.ready && updateDownload.version === updateInfo.latestVersion) return;
+    if (updateStartedFor.current === updateInfo.latestVersion) return;
+    void startUpdateDownload(updateInfo);
+  }, [updateInfo, updateDownload?.ready, updateDownload?.version]);
+
+  const handleRestartToUpdate = async () => {
+    try {
+      await invoke<string>("install_downloaded_update");
+    } catch (e) {
+      setUpdateDownload((prev) =>
+        prev
+          ? { ...prev, error: String(e), ready: false, downloading: false }
+          : {
+              version: updateInfo?.latestVersion ?? "",
+              ready: false,
+              downloading: false,
+              percent: 0,
+              message: "",
+              path: null,
+              error: String(e),
+            },
+      );
+    }
+  };
 
   useEffect(() => {
     if (!settings) return;
@@ -232,6 +323,8 @@ function AppInner({ onLanguageChange }: { onLanguageChange: (lang: string) => vo
         status={status}
         theme={settings.theme}
         updateInfo={updateInfo}
+        updateDownload={updateDownload}
+        onRestartToUpdate={handleRestartToUpdate}
         onOpenUpdates={() => setTab("settings")}
         onCycleTheme={handleCycleTheme}
         onToggleProxy={handleToggleProxy}
@@ -250,7 +343,7 @@ function AppInner({ onLanguageChange }: { onLanguageChange: (lang: string) => vo
                   onClick={() => setTab(item.id)}
                   className={`w-full flex h-8 items-center gap-2.5 rounded-[6px] px-2 text-[12.5px] transition-colors ${
                     active
-                      ? "bg-[var(--control-active)] font-medium text-[var(--fg)] shadow-[inset_0_0_0_1px_var(--border)]"
+                      ? "bg-[var(--nav-active)] font-medium text-[var(--fg)]"
                       : "text-[var(--fg-muted)] hover:bg-[var(--bg-subtle)] hover:text-[var(--fg)]"
                   }`}
                 >
@@ -371,6 +464,9 @@ function AppInner({ onLanguageChange }: { onLanguageChange: (lang: string) => vo
             <SettingsView
               settings={settings}
               updateInfo={updateInfo}
+              updateDownload={updateDownload}
+              onStartUpdateDownload={() => startUpdateDownload()}
+              onRestartToUpdate={handleRestartToUpdate}
               onUpdateChecked={setUpdateInfo}
               onSave={handleSaveSettings}
               onToggleAutostart={handleToggleAutostart}

@@ -209,6 +209,70 @@ pub async fn fetch_antigravity_quota(account: &AntigravityAccountConfig, proxy: 
     report
 }
 
+pub async fn fetch_devin_plan(settings: &AppSettings) -> AccountQuotaReport {
+    let now = Utc::now().to_rfc3339();
+    let mut report = AccountQuotaReport {
+        account_key: "devin".to_string(),
+        provider: "devin".to_string(),
+        label: "Devin".to_string(),
+        email: None,
+        signed_in: check_simple_auth_status(settings)
+            .get("devin")
+            .copied()
+            .unwrap_or(false),
+        windows: Vec::new(),
+        error: None,
+        verification_url: None,
+        checked_at: now,
+    };
+
+    let Some(exe) = resolve_runtime_executable("devin", &["devin"], settings.devin_path.as_deref()) else {
+        report.error = Some("Devin CLI не найден".to_string());
+        return report;
+    };
+
+    let args = vec!["auth".to_string(), "status".to_string()];
+    let mut cmd = spawn_hidden_cmd(&exe, &args, &[]);
+    let output = match tokio::time::timeout(std::time::Duration::from_secs(10), cmd.output()).await {
+        Ok(Ok(out)) if out.status.success() => out,
+        _ => {
+            report.error = Some("Не удалось прочитать тариф Devin через CLI".to_string());
+            return report;
+        }
+    };
+
+    let text = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let mut tier: Option<String> = None;
+    let mut plan: Option<String> = None;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if let Some(value) = trimmed.strip_prefix("Tier:") {
+            let value = value.trim();
+            if !value.is_empty() {
+                tier = Some(value.to_string());
+            }
+        } else if let Some(value) = trimmed.strip_prefix("Plan:") {
+            let value = value.trim();
+            if !value.is_empty() {
+                plan = Some(value.to_string());
+            }
+        }
+    }
+
+    if let Some(value) = tier.or(plan) {
+        report.signed_in = true;
+        report.label = format!("Devin · {value}");
+        report.error = Some("CLI не отдаёт остаток лимитов — показан только тариф аккаунта.".to_string());
+    } else if report.signed_in {
+        report.error = Some("CLI не отдаёт остаток лимитов.".to_string());
+    }
+    report
+}
+
 pub async fn fetch_codex_quota(settings: &AppSettings) -> AccountQuotaReport {
     let now = Utc::now().to_rfc3339();
     let mut report = AccountQuotaReport {

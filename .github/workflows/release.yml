@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version (e.g. 0.2.0, used directly as Release Title)"
+        description: "Release version (e.g. 0.5.0, used directly as Release Title)"
         required: true
-        default: "0.4.0"
+        default: "0.5.0"
         type: string
       notes:
         description: "Additional release notes (write in English)"
@@ -30,24 +30,7 @@ permissions:
 jobs:
   create-release:
     runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
-      - name: Compute target matrix
-        id: set-matrix
-        shell: bash
-        run: |
-          P="${{ inputs.platforms }}"
-          if [ "$P" = "windows" ]; then
-            echo 'matrix={"include":[{"platform":"windows-latest","args":""}]}' >> "$GITHUB_OUTPUT"
-          elif [ "$P" = "macos" ]; then
-            echo 'matrix={"include":[{"platform":"macos-latest","args":"--target universal-apple-darwin"}]}' >> "$GITHUB_OUTPUT"
-          elif [ "$P" = "linux" ]; then
-            echo 'matrix={"include":[{"platform":"ubuntu-22.04","args":""}]}' >> "$GITHUB_OUTPUT"
-          else
-            echo 'matrix={"include":[{"platform":"windows-latest","args":""},{"platform":"macos-latest","args":"--target universal-apple-darwin"},{"platform":"ubuntu-22.04","args":""}]}' >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -68,9 +51,9 @@ jobs:
 
           ### Included
           - Dual gateway: Anthropic (`/v1/messages`, `/v1/models`) and OpenAI/Codex (`/v1/chat/completions`, `/v1/responses`, `/v1/models`)
-          - Built-in authentication, multi-account profiles for every CLI provider, and live limits/quota inspection
+          - Built-in authentication, multi-account profiles for every CLI provider, and live limits/quota inspection where the provider exposes them
           - Automatic installation of missing CLI runtimes, SQLite-backed playground chats, detailed logs, and token/cost tracking
-          - Built-in update checks and installation from GitHub Releases
+          - Background update download; the app restarts into the new version only when you press the restart button
           - Installers: Windows (custom `.exe` setup), macOS (Universal `.dmg`), Linux (`.AppImage` / `.deb` / `.rpm`)
           RELEASE_BODY
           if [ -n "$INPUT_NOTES" ]; then
@@ -86,14 +69,10 @@ jobs:
             gh release create "$TAG" --title "$TITLE" --notes-file "$BODY_FILE" --target "${{ github.sha }}" $PRERELEASE_FLAG
           fi
 
-  build-tauri:
+  build-windows:
     needs: create-release
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJson(needs.create-release.outputs.matrix) }}
-
-    runs-on: ${{ matrix.platform }}
-
+    if: ${{ inputs.platforms == 'all' || inputs.platforms == 'windows' }}
+    runs-on: windows-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -107,26 +86,11 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
           workspaces: desktop/src-tauri
-
-      - name: Install Linux system dependencies
-        if: matrix.platform == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            libgtk-3-dev \
-            libxdo-dev \
-            libssl-dev
 
       - name: Sync version into manifests
         shell: bash
@@ -155,7 +119,6 @@ jobs:
         run: npm ci
 
       - name: Build and upload custom Windows Setup
-        if: matrix.platform == 'windows-latest'
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -175,8 +138,53 @@ jobs:
           Pop-Location
           gh release upload "v$ver" $outExe --clobber
 
-      - name: Build and upload Tauri bundles (macOS / Linux)
-        if: matrix.platform != 'windows-latest'
+  build-macos:
+    needs: create-release
+    if: ${{ inputs.platforms == 'all' || inputs.platforms == 'macos' }}
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+
+      - name: Sync version into manifests
+        shell: bash
+        run: |
+          VER="${{ inputs.version }}"
+          node -e '
+            const fs = require("fs");
+            const ver = process.argv[1];
+            for (const p of ["desktop/package.json", "desktop/src-tauri/tauri.conf.json"]) {
+              const j = JSON.parse(fs.readFileSync(p, "utf8"));
+              j.version = ver;
+              fs.writeFileSync(p, JSON.stringify(j, null, 2) + "\n");
+            }
+            const cargoPath = "desktop/src-tauri/Cargo.toml";
+            const cargo = fs.readFileSync(cargoPath, "utf8").replace(/^version = ".*"$/m, `version = "${ver}"`);
+            fs.writeFileSync(cargoPath, cargo);
+          ' "$VER"
+
+      - name: Install frontend dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Build and upload macOS bundles
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -184,18 +192,73 @@ jobs:
           projectPath: desktop
           tagName: v${{ inputs.version }}
           releaseName: ${{ inputs.version }}
-          releaseBody: |
-            ## AI Proxy Desktop
-
-            Cross-platform Tauri app exposing local **Anthropic Messages API** and **OpenAI Chat / Responses API** gateways on top of local AI CLIs (Devin, Antigravity, OpenCode, Grok, Codex, Copilot, Cursor, Cline, Mistral, Kimi, Hermes, and custom ACP agents).
-
-            ### Included
-            - Dual gateway: Anthropic (`/v1/messages`, `/v1/models`) and OpenAI/Codex (`/v1/chat/completions`, `/v1/responses`, `/v1/models`)
-            - Built-in authentication, multi-account profiles for every CLI provider, and live limits/quota inspection
-            - Automatic installation of missing CLI runtimes, local SQLite playground chats, detailed logs, and token/cost tracking
-            - Installers: Windows (custom `.exe` setup), macOS (Universal `.dmg`), Linux (`.AppImage` / `.deb` / `.rpm`)
-
-            ${{ inputs.notes }}
           releaseDraft: false
           prerelease: ${{ inputs.prerelease }}
-          args: ${{ matrix.args }}
+          args: --target universal-apple-darwin
+
+  build-linux:
+    needs: create-release
+    if: ${{ inputs.platforms == 'all' || inputs.platforms == 'linux' }}
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libgtk-3-dev \
+            libxdo-dev \
+            libssl-dev
+
+      - name: Sync version into manifests
+        shell: bash
+        run: |
+          VER="${{ inputs.version }}"
+          node -e '
+            const fs = require("fs");
+            const ver = process.argv[1];
+            for (const p of ["desktop/package.json", "desktop/src-tauri/tauri.conf.json"]) {
+              const j = JSON.parse(fs.readFileSync(p, "utf8"));
+              j.version = ver;
+              fs.writeFileSync(p, JSON.stringify(j, null, 2) + "\n");
+            }
+            const cargoPath = "desktop/src-tauri/Cargo.toml";
+            const cargo = fs.readFileSync(cargoPath, "utf8").replace(/^version = ".*"$/m, `version = "${ver}"`);
+            fs.writeFileSync(cargoPath, cargo);
+          ' "$VER"
+
+      - name: Install frontend dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Build and upload Linux bundles
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: desktop
+          tagName: v${{ inputs.version }}
+          releaseName: ${{ inputs.version }}
+          releaseDraft: false
+          prerelease: ${{ inputs.prerelease }}

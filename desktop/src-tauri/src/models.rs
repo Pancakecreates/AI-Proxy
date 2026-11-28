@@ -41,10 +41,11 @@ fn speed_suffix_re() -> &'static Regex {
 }
 
 pub fn normalize_tier_display_name(name: &str) -> String {
-    if claude_tier_display_re().is_match(name) && !name.to_lowercase().starts_with("claude") {
-        format!("Claude {name}")
+    let trimmed = name.trim();
+    if claude_tier_display_re().is_match(trimmed) && !trimmed.to_lowercase().starts_with("claude") {
+        format!("Claude {trimmed}")
     } else {
-        name.to_string()
+        trimmed.to_string()
     }
 }
 
@@ -587,12 +588,23 @@ pub fn format_anthropic_models_list(models: &[BackendModelEntry], gateway_aliase
             } else {
                 &m.qualified_id
             };
+            let max_effort = m
+                .supported_efforts
+                .iter()
+                .max_by_key(|level| {
+                    ThoughtLevel::SCALE
+                        .iter()
+                        .position(|candidate| candidate == *level)
+                        .unwrap_or(0)
+                })
+                .map(ThoughtLevel::as_str)
+                .unwrap_or("max");
             let mut obj = json!({
                 "type": "model",
                 "id": id,
                 "display_name": m.display_name,
                 "description": m.description,
-                "max_effort_level": "max",
+                "max_effort_level": max_effort,
                 "created_at": CREATED_AT_ISO,
                 "max_input_tokens": m.max_input_tokens,
                 "max_tokens": m.max_tokens,
@@ -715,6 +727,16 @@ mod tests {
         let supported = [ThoughtLevel::Medium, ThoughtLevel::High, ThoughtLevel::Max];
         assert_eq!(fit_supported_effort(Some(ThoughtLevel::Xhigh), &supported), Some(ThoughtLevel::Max));
         assert_eq!(fit_supported_effort(Some(ThoughtLevel::Low), &supported), Some(ThoughtLevel::Medium));
+    }
+
+    #[test]
+    fn claude_tier_names_get_the_family_prefix_once() {
+        assert_eq!(normalize_tier_display_name("Opus 4.6"), "Claude Opus 4.6");
+        assert_eq!(normalize_tier_display_name("Sonnet 5.5"), "Claude Sonnet 5.5");
+        assert_eq!(normalize_tier_display_name("Haiku 4.6"), "Claude Haiku 4.6");
+        assert_eq!(normalize_tier_display_name("Claude Opus 4.6"), "Claude Opus 4.6");
+        assert_eq!(normalize_tier_display_name("GPT-5.4"), "GPT-5.4");
+        assert_eq!(normalize_tier_display_name("  Opus 4.6  "), "Claude Opus 4.6");
     }
 }
 

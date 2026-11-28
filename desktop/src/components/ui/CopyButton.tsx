@@ -54,8 +54,8 @@ export const CopyButton: React.FC<CopyButtonProps> = ({
         title={copied ? (copiedLabel ?? title) : title}
         aria-label={title}
         className={cn(
-          "inline-flex size-6 shrink-0 items-center justify-center rounded-[5px] border border-transparent text-[var(--fg-subtle)] transition-colors hover:border-[var(--border)] hover:bg-[var(--bg-elevated)] hover:text-[var(--fg)]",
-          copied && "border-[var(--border)] bg-[var(--bg-elevated)]",
+          "inline-flex size-6 shrink-0 items-center justify-center rounded-[5px] border border-transparent text-[var(--fg-subtle)] transition-colors hover:bg-[var(--bg-subtle)] hover:text-[var(--fg)]",
+          copied && "bg-[var(--success-soft)] text-[var(--success)]",
           className,
         )}
       >
@@ -70,7 +70,7 @@ export const CopyButton: React.FC<CopyButtonProps> = ({
       onClick={handleCopy}
       title={copied ? (copiedLabel ?? title) : title}
       className={cn(
-        "inline-flex h-6.5 shrink-0 items-center gap-1.5 rounded-[5px] border border-[var(--border)] bg-[var(--bg-elevated)] px-2 text-[11px] font-medium text-[var(--fg-muted)] transition-colors hover:border-[var(--border-strong)] hover:text-[var(--fg)]",
+        "inline-flex h-6.5 shrink-0 items-center gap-1.5 rounded-[5px] border border-transparent bg-[var(--bg-subtle)] px-2 text-[11px] font-medium text-[var(--fg-muted)] transition-colors hover:bg-[var(--bg-hover)] hover:text-[var(--fg)]",
         className,
       )}
     >

@@ -1,7 +1,7 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { CheckCircle2, AlertCircle, Loader2, Pencil, Plus, Trash2, Globe } from "lucide-react";
-import type { AppSettings, ExternalProviderConfig, ProxyMode } from "./types";
+import { CheckCircle2, AlertCircle, Loader2, Pencil, Plus, Trash2, Globe, MonitorCog } from "lucide-react";
+import type { AppSettings, ExternalProviderConfig, ProxyMode, SystemProxyState } from "./types";
 import { useI18n } from "./i18n";
 import {
   Button,
@@ -417,6 +417,113 @@ export const ProxySettingsPanel: React.FC<ProxySettingsPanelProps> = ({ value, o
             {t("Прокси работает: ответ за {latency} мс", { latency: result.latencyMs })}
             {result.externalIp ? t(", внешний IP {ip}", { ip: result.externalIp }) : ""}.
           </span>
+        </div>
+      )}
+      {error && (
+        <div className="mt-2 flex items-start gap-2 rounded-md border border-[var(--danger)] bg-[var(--danger-soft)] px-3 py-2 text-xs text-[var(--danger)]">
+          <AlertCircle size={14} className="mt-px shrink-0" />
+          <span>{error}</span>
+        </div>
+      )}
+    </div>
+  );
+};
+
+interface SystemProxyPanelProps {
+  proxyUrl: string;
+}
+
+export const SystemProxyPanel: React.FC<SystemProxyPanelProps> = ({ proxyUrl }) => {
+  const { t } = useI18n();
+  const [state, setState] = useState<SystemProxyState | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [ok, setOk] = useState<string | null>(null);
+
+  useEffect(() => {
+    invoke<SystemProxyState>("get_system_proxy_state")
+      .then(setState)
+      .catch((e) => setError(String(e)));
+  }, []);
+
+  const run = async (command: "apply_system_proxy" | "restore_system_proxy") => {
+    setBusy(true);
+    setError(null);
+    setOk(null);
+    try {
+      const next =
+        command === "apply_system_proxy"
+          ? await invoke<SystemProxyState>(command, { proxyUrl })
+          : await invoke<SystemProxyState>(command);
+      setState(next);
+      setOk(
+        command === "apply_system_proxy"
+          ? t("Системный прокси включён")
+          : t("Исходные настройки прокси восстановлены"),
+      );
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const supported = state?.supported ?? true;
+  if (!supported) {
+    return (
+      <p className="text-[11px] text-[var(--fg-subtle)]">
+        {t("Системный прокси доступен только в Windows.")}
+      </p>
+    );
+  }
+
+  return (
+    <div>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 items-start gap-2.5">
+          <MonitorCog className="mt-0.5 size-3.5 shrink-0 text-[var(--fg-muted)]" />
+          <div className="min-w-0">
+            <div className="text-[12px] font-medium text-[var(--fg)]">
+              {t("Системный прокси Windows")}
+            </div>
+            <div className="text-[11px] text-[var(--fg-subtle)]">
+              {state?.enabled
+                ? state.appliedByUs
+                  ? t("Включён AI Proxy: {server}", { server: state.server ?? "—" })
+                  : t("Уже включён другой программой: {server}", { server: state.server ?? "—" })
+                : t("Выключен")}
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center gap-1.5">
+          {state?.appliedByUs ? (
+            <Button variant="secondary" size="xs" onClick={() => run("restore_system_proxy")} disabled={busy}>
+              {busy && <Loader2 className="size-3.5 animate-spin" />}
+              <span>{t("Вернуть как было")}</span>
+            </Button>
+          ) : (
+            <Button
+              variant="secondary"
+              size="xs"
+              onClick={() => run("apply_system_proxy")}
+              disabled={busy || !proxyUrl.trim()}
+              title={!proxyUrl.trim() ? t("Сначала укажите глобальный прокси выше") : undefined}
+            >
+              {busy && <Loader2 className="size-3.5 animate-spin" />}
+              <span>{t("Включить для системы")}</span>
+            </Button>
+          )}
+        </div>
+      </div>
+      <p className="mt-1.5 text-[11px] leading-relaxed text-[var(--fg-subtle)]">
+        {t(
+          "Применяется ко всем приложениям, которые используют настройки прокси Windows. Действует, пока AI-Proxy запущен; при выходе исходная настройка возвращается.",
+        )}
+      </p>
+      {ok && (
+        <div className="mt-2 flex items-start gap-2 rounded-md border border-[var(--success)] bg-[var(--success-soft)] px-3 py-2 text-xs text-[var(--success)]">
+          <CheckCircle2 size={14} className="mt-px shrink-0" />
+          <span>{ok}</span>
         </div>
       )}
       {error && (

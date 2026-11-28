@@ -14,6 +14,7 @@ mod pricing;
 mod quota;
 mod router;
 mod runtime_installer;
+mod sysproxy;
 mod types;
 mod updater;
 
@@ -94,6 +95,11 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(move |app| {
+            // A previous run may have exited before restoring WinINET settings.
+            // Put the user's original proxy configuration back before anything
+            // else, so a dead local proxy never leaves the machine offline.
+            sysproxy::restore_quiet(&app.handle().clone());
+
             let data_dir = app
                 .path()
                 .app_data_dir()
@@ -316,6 +322,7 @@ pub fn run() {
                     tauri::async_runtime::block_on(async {
                         state.stop_proxy_internal().await;
                     });
+                    sysproxy::restore_quiet(&window.app_handle().clone());
                 }
             }
         })
@@ -355,7 +362,12 @@ pub fn run() {
             commands::test_external_provider,
             commands::test_proxy_connection,
             commands::check_app_update,
-            commands::download_and_launch_update,
+            commands::download_app_update,
+            commands::get_update_download_state,
+            commands::install_downloaded_update,
+            commands::get_system_proxy_state,
+            commands::apply_system_proxy,
+            commands::restore_system_proxy,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -651,10 +651,11 @@ impl CodexBackend {
             .iter()
             .map(|m| {
                 let qid = format!("{}{}", self.qualified_prefix, m.id);
+                let display = crate::models::normalize_tier_display_name(&m.name);
                 BackendModelEntry {
                     id: qid.clone(),
-                    name: m.name.clone(),
-                    display_name: m.name.clone(),
+                    name: display.clone(),
+                    display_name: display,
                     gateway_id: to_gateway_model_id(&qid, true),
                     supports_images: m.supports_images,
                     description: format!("ChatGPT: {}", m.id).chars().take(100).collect(),

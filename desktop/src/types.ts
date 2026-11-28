@@ -154,6 +154,23 @@ export interface AppUpdateInfo {
   checkedAt: string;
 }
 
+export interface UpdateDownloadState {
+  version: string;
+  ready: boolean;
+  downloading: boolean;
+  percent: number;
+  message: string;
+  path: string | null;
+  error: string | null;
+}
+
+export interface SystemProxyState {
+  supported: boolean;
+  enabled: boolean;
+  server: string | null;
+  appliedByUs: boolean;
+}
+
 export interface BackendModelEntry {
   id: string;
   name: string;

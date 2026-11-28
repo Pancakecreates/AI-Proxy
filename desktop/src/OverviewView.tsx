@@ -65,6 +65,7 @@ interface GatewayColumnProps {
   url: string;
   token: string;
   configLines: [string, string];
+  configCopy: string;
 }
 
 const GatewayColumn: React.FC<GatewayColumnProps> = ({
@@ -75,6 +76,7 @@ const GatewayColumn: React.FC<GatewayColumnProps> = ({
   url,
   token,
   configLines,
+  configCopy,
 }) => {
   const { t } = useI18n();
   return (
@@ -107,7 +109,7 @@ const GatewayColumn: React.FC<GatewayColumnProps> = ({
           <div className="truncate">{configLines[1]}</div>
         </div>
         <CopyButton
-          text={configLines.join("\n")}
+          text={configCopy}
           label={t("Конфиг")}
           copiedLabel={t("Готово")}
           title={t("Скопировать конфиг")}
@@ -225,7 +227,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
               <>
                 {t("Измерено")} {usage?.measuredCount ?? 0} · {t("оценка")} {usage?.estimatedCount ?? 0}
                 <br />
-                {t("Средний ответ")} {formatDuration(usage?.avgLatencyMs ?? 0)}
+                {t("Среднее время ответа")} {formatDuration(usage?.avgLatencyMs ?? 0)}
               </>
             }
           />
@@ -261,6 +263,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                 `ANTHROPIC_BASE_URL=${anthropicUrl}`,
                 `ANTHROPIC_AUTH_TOKEN=${shorten(apiToken)}`,
               ]}
+              configCopy={[`ANTHROPIC_BASE_URL=${anthropicUrl}`, `ANTHROPIC_AUTH_TOKEN=${apiToken}`].join("\n")}
             />
             <GatewayColumn
               brand="openai"
@@ -273,6 +276,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                 `OPENAI_BASE_URL=${openaiUrl}`,
                 `OPENAI_API_KEY=${shorten(apiToken)}`,
               ]}
+              configCopy={[`OPENAI_BASE_URL=${openaiUrl}`, `OPENAI_API_KEY=${apiToken}`].join("\n")}
             />
           </div>
         </Panel>

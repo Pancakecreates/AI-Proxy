@@ -696,7 +696,7 @@ impl AcpBackend {
                         .trim()
                         .to_string()
                 } else {
-                    m.name.clone()
+                    crate::models::normalize_tier_display_name(&m.name)
                 };
 
                 let gateway_id = if self.cfg.kind == BackendKind::Devin && self.cfg.qualified_prefix.is_empty() {

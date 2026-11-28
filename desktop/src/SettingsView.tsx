@@ -1,9 +1,8 @@
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { FolderOpen, Save, Check, RefreshCw, Download, ExternalLink, Loader2 } from "lucide-react";
+import { FolderOpen, Save, Check, RefreshCw, Download, ExternalLink, Loader2, RotateCcw } from "lucide-react";
 import type {
   AppSettings,
   AppUpdateInfo,
@@ -14,6 +13,7 @@ import type {
   SpeedMode,
   ThoughtLevel,
   ProxyMode,
+  UpdateDownloadState,
 } from "./types";
 import { Select } from "./Select";
 import { BrandIcon } from "./BrandIcon";
@@ -29,11 +29,14 @@ import {
   Switch,
 } from "./components/ui";
 import { useI18n } from "./i18n";
-import { ProxySettingsPanel } from "./ExternalProvidersPanel";
+import { ProxySettingsPanel, SystemProxyPanel } from "./ExternalProvidersPanel";
 
 interface SettingsViewProps {
   settings: AppSettings;
   updateInfo: AppUpdateInfo | null;
+  updateDownload: UpdateDownloadState | null;
+  onStartUpdateDownload: () => Promise<void> | void;
+  onRestartToUpdate: () => Promise<void> | void;
   onUpdateChecked: (info: AppUpdateInfo | null) => void;
   onSave: (next: AppSettings, restart: boolean) => Promise<void>;
   onToggleAutostart: (enabled: boolean) => Promise<void>;
@@ -62,11 +65,15 @@ const CLI_PROXY_PROVIDERS: { key: string; label: string; brand: string }[] = [
   { key: "mistral", label: "Mistral Vibe", brand: "mistral" },
   { key: "kimi", label: "Kimi", brand: "kimi" },
   { key: "hermes", label: "Hermes", brand: "hermes" },
+  { key: "custom", label: "Custom ACP", brand: "custom" },
 ];
 
 export const SettingsView: React.FC<SettingsViewProps> = ({
   settings,
   updateInfo,
+  updateDownload,
+  onStartUpdateDownload,
+  onRestartToUpdate,
   onUpdateChecked,
   onSave,
   onToggleAutostart,
@@ -80,29 +87,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [saving, setSaving] = useState(false);
   const [savedToast, setSavedToast] = useState(false);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
-  const [installingUpdate, setInstallingUpdate] = useState(false);
-  const [updateProgress, setUpdateProgress] = useState<{
-    phase: string;
-    percent: number;
-    message: string;
-  } | null>(null);
   const [updateMsg, setUpdateMsg] = useState<string | null>(null);
   const [updateErr, setUpdateErr] = useState<string | null>(null);
-
-  useEffect(() => {
-    const unlisten = listen<{
-      phase: string;
-      downloaded: number;
-      total: number;
-      percent: number;
-      message: string;
-    }>("app-update-progress", (ev) => {
-      setUpdateProgress(ev.payload);
-    });
-    return () => {
-      unlisten.then((fn) => fn()).catch(() => {});
-    };
-  }, []);
 
   const handleCheckUpdate = async () => {
     setCheckingUpdate(true);
@@ -123,24 +109,16 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     }
   };
 
-  const handleInstallUpdate = async () => {
-    if (!updateInfo) return;
-    setInstallingUpdate(true);
+  const handleDownloadUpdate = async () => {
     setUpdateErr(null);
     setUpdateMsg(null);
-    setUpdateProgress(null);
-    try {
-      const msg = await invoke<string>("download_and_launch_update", {
-        assetUrl: updateInfo.assetUrl,
-        assetName: updateInfo.assetName,
-        releaseUrl: updateInfo.releaseUrl,
-      });
-      setUpdateMsg(msg);
-    } catch (e) {
-      setUpdateErr(String(e));
-    } finally {
-      setInstallingUpdate(false);
-    }
+    await onStartUpdateDownload();
+  };
+
+  const handleRestartToUpdate = async () => {
+    setUpdateErr(null);
+    setUpdateMsg(null);
+    await onRestartToUpdate();
   };
 
   const pickCwd = async () => {
@@ -264,7 +242,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             <div className="min-w-0">
               <PanelTitle>{t("Обновления приложения")}</PanelTitle>
               <PanelDescription>
-                {t("Обновление ставится поверх, приложение перезапустится само. Токен, аккаунты и настройки сохраняются.")}
+                {t("Установщик скачивается в фоне. Кнопка перезапуска появится рядом со «Стоп», когда всё будет готово. Токен, аккаунты и настройки сохраняются.")}
               </PanelDescription>
             </div>
             <div className="flex items-center gap-1.5">
@@ -276,19 +254,33 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 )}
                 <span>{t("Проверить")}</span>
               </Button>
-              {updateInfo?.hasUpdate && (
-                <Button variant="primary" size="xs" onClick={handleInstallUpdate} disabled={installingUpdate}>
-                  {installingUpdate ? (
+              {updateDownload?.ready ? (
+                <Button variant="primary" size="xs" onClick={handleRestartToUpdate}>
+                  <RotateCcw className="size-3.5" />
+                  <span>{t("Перезапустить и обновить")}</span>
+                </Button>
+              ) : updateInfo?.hasUpdate ? (
+                <Button
+                  variant="primary"
+                  size="xs"
+                  onClick={handleDownloadUpdate}
+                  disabled={Boolean(updateDownload?.downloading)}
+                >
+                  {updateDownload?.downloading ? (
                     <Loader2 className="size-3.5 animate-spin" />
                   ) : (
                     <Download className="size-3.5" />
                   )}
-                  <span>{installingUpdate ? t("Обновление…") : t("Обновить до v{version}", { version: updateInfo.latestVersion })}</span>
+                  <span>
+                    {updateDownload?.downloading
+                      ? t("Скачивание…")
+                      : t("Скачать обновление")}
+                  </span>
                 </Button>
-              )}
+              ) : null}
               {updateInfo?.releaseUrl && (
                 <Button
-                  variant="ghost"
+                  variant="secondary"
                   size="icon"
                   onClick={() => openUrl(updateInfo.releaseUrl).catch(() => {})}
                   title={t("Открыть на GitHub")}
@@ -301,19 +293,28 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
           </PanelHeader>
           <div className="space-y-2 p-4">
-            {installingUpdate && updateProgress && (
+            {(updateDownload?.downloading || updateDownload?.ready) && (
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between text-[11px] tabular-nums text-[var(--fg-muted)]">
-                  <span>{updateProgress.message}</span>
-                  <span>{Math.round(updateProgress.percent)}%</span>
+                  <span>{updateDownload.message}</span>
+                  <span>{Math.round(updateDownload.percent)}%</span>
                 </div>
                 <div className="progress-track">
                   <div
                     className="progress-fill"
-                    style={{ width: `${Math.max(4, Math.min(100, updateProgress.percent))}%` }}
+                    style={{ width: `${Math.max(4, Math.min(100, updateDownload.percent))}%` }}
                   />
                 </div>
               </div>
+            )}
+            {updateDownload?.ready && (
+              <p className="text-[12px] text-[var(--success)]">
+                {t("Версия v{version} скачана. Нажмите «Перезапустить и обновить» — приложение установит её и откроется заново.", { version: updateDownload.version })}
+              </p>
+            )}
+            {updateDownload?.error && <p className="text-[12px] text-[var(--danger)]">{updateDownload.error}</p>}
+            {updateDownload && !updateDownload.downloading && !updateDownload.ready && updateDownload.message && (
+              <p className="text-[12px] text-[var(--fg-muted)]">{updateDownload.message}</p>
             )}
             {updateMsg && <p className="text-[12px] text-[var(--success)]">{updateMsg}</p>}
             {updateErr && <p className="text-[12px] text-[var(--danger)]">{updateErr}</p>}
@@ -325,7 +326,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   : ""}
               </div>
             )}
-            {!updateMsg && !updateErr && !installingUpdate && (
+            {!updateMsg && !updateErr && !updateDownload?.downloading && !updateDownload?.ready && (
               <p className="text-[11px] text-[var(--fg-subtle)]">
                 {t("Проверка идёт через GitHub Releases. Перед установкой приложение закроет прокси.")}
               </p>
@@ -524,7 +525,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             <div className="space-y-1">
               <PanelTitle>{t("Сеть и прокси")}</PanelTitle>
               <PanelDescription>
-                {t("Глобальный прокси для всех провайдеров. Переопределение для конкретного провайдера имеет приоритет над глобальным; если задано и там и там — используется провайдерское.")}
+                {t("Глобальный прокси применяется к запросам AI-Proxy и к запускаемым ACP-приложениям. Переопределение провайдера важнее глобального. Системный прокси ниже охватывает любые программы Windows.")}
               </PanelDescription>
             </div>
           </PanelHeader>
@@ -533,6 +534,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               value={draft.proxyUrl ?? ""}
               onChange={(v) => setDraft({ ...draft, proxyUrl: v.trim() ? v : null })}
             />
+            <div className="border-t pt-3">
+              <SystemProxyPanel proxyUrl={draft.proxyUrl ?? ""} />
+            </div>
             <div className="border-t pt-3">
               <div className="mb-2 text-[11px] font-medium text-[var(--fg-muted)]">
                 {t("Переопределения по провайдерам")}

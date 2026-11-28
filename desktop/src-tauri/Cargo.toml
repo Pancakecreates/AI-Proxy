@@ -1,6 +1,6 @@
 [package]
 name = "ai-proxy-desktop"
-version = "0.3.1"
+version = "0.5.0"
 description = "Cross-platform Anthropic & OpenAI local proxy desktop app backed by local AI CLIs"
 authors = ["Pancakecreates"]
 edition = "2021"
@@ -35,6 +35,10 @@ flate2 = "1"
 tar = "0.4"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream", "socks"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-registry = "0.6"
+windows-sys = { version = "0.61", features = ["Win32_Networking_WinInet"] }
 
 [profile.release]
 panic = "abort"

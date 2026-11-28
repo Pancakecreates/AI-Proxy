@@ -159,6 +159,83 @@ fn flex_tier_rank(level: ThoughtLevel) -> u8 {
     }
 }
 
+/// Flex picks a tier from the actual request when the client did not ask for a
+/// specific effort. This is a deterministic classifier, not a hidden model call:
+/// it keeps latency and cost predictable while still sending small mechanical
+/// edits to cheap models and long, multi-step work to stronger ones.
+fn classify_flex_task(request: Option<&UnifiedTurnRequest>) -> ThoughtLevel {
+    let Some(req) = request else {
+        return ThoughtLevel::Medium;
+    };
+    let last_user = req
+        .messages
+        .iter()
+        .rev()
+        .find(|m| m.role.eq_ignore_ascii_case("user"))
+        .map(|m| m.text.as_str())
+        .unwrap_or("");
+    let prompt = last_user.to_lowercase();
+    let total_chars = req.system.len()
+        + req
+            .messages
+            .iter()
+            .map(|m| m.text.len())
+            .sum::<usize>();
+    let has_images = req.messages.iter().any(|m| !m.images.is_empty());
+    let multi_turn = req.messages.len() > 8;
+
+    const COMPLEX: &[&str] = &[
+        "архитектур",
+        "рефактор",
+        "отрефактор",
+        "спроектир",
+        "debug",
+        "отлад",
+        "почему не работает",
+        "исправь баг",
+        "найди причину",
+        "оптимиз",
+        "безопасн",
+        "миграц",
+        "тест",
+        "implement",
+        "architecture",
+        "refactor",
+        "root cause",
+        "security",
+        "performance",
+        "migration",
+        "end-to-end",
+        "concurrency",
+        "race condition",
+    ];
+    const SIMPLE: &[&str] = &[
+        "переведи",
+        "переименуй",
+        "переформат",
+        "формат",
+        "одной строкой",
+        "кратко",
+        "что такое",
+        "сколько будет",
+        "typo",
+        "rename",
+        "translate",
+        "reformat",
+        "one-liner",
+        "summarize",
+        "shorten",
+    ];
+
+    if has_images || multi_turn || total_chars > 4_000 || COMPLEX.iter().any(|k| prompt.contains(k)) {
+        return ThoughtLevel::High;
+    }
+    if total_chars < 1_200 && SIMPLE.iter().any(|k| prompt.contains(k)) {
+        return ThoughtLevel::Low;
+    }
+    ThoughtLevel::Medium
+}
+
 fn context_bonus(m: &BackendModelEntry) -> f64 {
     (m.max_input_tokens.max(1) as f64).ln() / 20.0
 }
@@ -815,14 +892,25 @@ impl BackendRouter {
             .to_string();
         let (flex_base, flex_effort, flex_speed) = peel_effort_and_speed_suffixes(&flex_slug);
         if is_flex_model_slug(&flex_base) {
-            let tier = flex_effort
+            let explicit_tier = flex_effort
                 .or_else(|| request.and_then(|r| r.requested_effort))
-                .or(s.thought_level)
-                .unwrap_or(ThoughtLevel::Medium);
+                .or(s.thought_level);
+            let tier = explicit_tier.unwrap_or_else(|| classify_flex_task(request));
             let pool = flex_candidates(&all_models, &s, request);
             let choice = choose_flex_model(&s, &pool, tier).ok_or_else(|| {
                 "Flex не нашёл доступных моделей: включите хотя бы одну модель в каталоге.".to_string()
             })?;
+            (self.log)(
+                "info",
+                "flex",
+                &format!(
+                    "Flex: задача → {}, выбрана «{}» ({}){}",
+                    tier.as_str(),
+                    choice.display_name,
+                    choice.qualified_id,
+                    if explicit_tier.is_some() { ", усилие задано клиентом" } else { ", эвристика по задаче" }
+                ),
+            );
             let backend = backends
                 .iter()
                 .find(|b| b.key() == choice.backend_key)
@@ -1036,5 +1124,46 @@ mod tests {
         ];
         let chosen = choose_flex_model(&settings, &candidates, ThoughtLevel::High).expect("high choice");
         assert_eq!(chosen.native_id, "claude-opus-5");
+    }
+
+    fn flex_request(text: &str) -> UnifiedTurnRequest {
+        UnifiedTurnRequest {
+            model: Some("flex".into()),
+            system: String::new(),
+            messages: vec![crate::types::NormalizedMessage {
+                role: "user".into(),
+                text: text.into(),
+                images: vec![],
+            }],
+            requested_effort: None,
+            thinking_disabled: false,
+            thinking_budget: None,
+            requested_speed: None,
+            cwd: None,
+        }
+    }
+
+    #[test]
+    fn flex_task_classifier_uses_complexity_signals() {
+        assert_eq!(
+            classify_flex_task(Some(&flex_request("переведи это на английский"))),
+            ThoughtLevel::Low
+        );
+        assert_eq!(
+            classify_flex_task(Some(&flex_request("переименуй переменную"))),
+            ThoughtLevel::Low
+        );
+        assert_eq!(
+            classify_flex_task(Some(&flex_request("спроектируй архитектуру сервиса"))),
+            ThoughtLevel::High
+        );
+        assert_eq!(
+            classify_flex_task(Some(&flex_request("исправь баг с гонкой при записи"))),
+            ThoughtLevel::High
+        );
+        assert_eq!(
+            classify_flex_task(Some(&flex_request("добавь кнопку в настройки"))),
+            ThoughtLevel::Medium
+        );
     }
 }

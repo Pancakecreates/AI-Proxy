@@ -12,8 +12,9 @@ import {
   Monitor,
   Loader2,
   ArrowDownToLine,
+  RotateCcw,
 } from "lucide-react";
-import type { AppUpdateInfo, ProxyRuntimeStatus } from "./types";
+import type { AppUpdateInfo, ProxyRuntimeStatus, UpdateDownloadState } from "./types";
 import { useI18n } from "./i18n";
 import { Button } from "./components/ui";
 
@@ -21,6 +22,8 @@ interface TitleBarProps {
   status: ProxyRuntimeStatus | null;
   theme: "auto" | "dark" | "light";
   updateInfo: AppUpdateInfo | null;
+  updateDownload: UpdateDownloadState | null;
+  onRestartToUpdate: () => void;
   onOpenUpdates: () => void;
   onCycleTheme: () => void;
   onToggleProxy: () => void;
@@ -30,6 +33,8 @@ export const TitleBar: React.FC<TitleBarProps> = ({
   status,
   theme,
   updateInfo,
+  updateDownload,
+  onRestartToUpdate,
   onOpenUpdates,
   onCycleTheme,
   onToggleProxy,
@@ -86,23 +91,38 @@ export const TitleBar: React.FC<TitleBarProps> = ({
         <span data-tauri-drag-region className="text-[12.5px] font-semibold tracking-[-0.01em] text-[var(--fg)]">
           AI Proxy
         </span>
-        <span data-tauri-drag-region className="hidden text-[11px] text-[var(--fg-subtle)] sm:inline">
-          {t("локальный шлюз")}
-        </span>
       </div>
 
       <div className="flex h-full items-center gap-1">
-        {updateInfo?.hasUpdate && (
+        {updateDownload?.ready ? (
+          <button
+            type="button"
+            onClick={onRestartToUpdate}
+            title={t("Установить v{v} и перезапустить", { v: updateDownload.version })}
+            className="mr-1 inline-flex h-6.5 items-center gap-1.5 rounded-[5px] bg-[var(--accent)] px-2 text-[11px] font-medium text-[var(--accent-fg)] transition-[filter] hover:brightness-110"
+          >
+            <RotateCcw className="size-3" />
+            <span>{t("Перезапустить")}</span>
+          </button>
+        ) : updateDownload?.downloading ? (
+          <span
+            title={updateDownload.message}
+            className="mr-1 inline-flex h-6.5 items-center gap-1.5 rounded-[5px] bg-[var(--accent-soft)] px-2 text-[11px] font-medium tabular-nums text-[var(--accent)]"
+          >
+            <Loader2 className="size-3 animate-spin" />
+            <span>{Math.round(updateDownload.percent)}%</span>
+          </span>
+        ) : updateInfo?.hasUpdate ? (
           <button
             type="button"
             onClick={onOpenUpdates}
             title={t("Доступна версия v{v}", { v: updateInfo.latestVersion })}
-            className="mr-1 inline-flex h-6 items-center gap-1 rounded-[5px] bg-[var(--accent-soft)] px-1.5 text-[11px] font-medium text-[var(--accent)] transition-[filter] hover:brightness-110"
+            className="mr-1 inline-flex h-6.5 items-center gap-1 rounded-[5px] bg-[var(--accent-soft)] px-1.5 text-[11px] font-medium text-[var(--accent)] transition-[filter] hover:brightness-110"
           >
             <ArrowDownToLine className="size-3" />
             <span>v{updateInfo.latestVersion}</span>
           </button>
-        )}
+        ) : null}
 
         <Button
           variant={running ? "secondary" : "primary"}
@@ -143,6 +163,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
             type="button"
             onClick={handleMinimize}
             aria-label={t("Свернуть")}
+            data-press="none"
             className="inline-flex h-full w-[46px] items-center justify-center text-[var(--fg-muted)] transition-colors hover:bg-[var(--bg-subtle)] hover:text-[var(--fg)]"
           >
             <Minus className="size-3.5" />
@@ -151,6 +172,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
             type="button"
             onClick={handleToggleMax}
             aria-label={maximized ? t("Восстановить") : t("Развернуть")}
+            data-press="none"
             className="inline-flex h-full w-[46px] items-center justify-center text-[var(--fg-muted)] transition-colors hover:bg-[var(--bg-subtle)] hover:text-[var(--fg)]"
           >
             {maximized ? <Copy className="size-3" /> : <Square className="size-3" />}
@@ -159,6 +181,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
             type="button"
             onClick={handleClose}
             aria-label={t("Закрыть")}
+            data-press="none"
             className="inline-flex h-full w-[46px] items-center justify-center text-[var(--fg-muted)] transition-colors hover:bg-[#c42b1c] hover:text-white"
           >
             <X className="size-3.5" />

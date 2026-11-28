@@ -100,9 +100,30 @@ export const LogsView: React.FC<LogsViewProps> = ({
           <Segmented
             value={subTab}
             onChange={setSubTab}
+            className="min-w-[15.5rem]"
             options={[
-              { value: "requests", label: t("Запросы · {count}", { count: reqLogs.length }) },
-              { value: "system", label: t("Системные · {count}", { count: appLogs.length }) },
+              {
+                value: "requests",
+                label: (
+                  <span className="inline-flex w-[6.75rem] items-center justify-between gap-2">
+                    <span>{t("Запросы")}</span>
+                    <span className="min-w-[2.5ch] text-right tabular-nums text-[var(--fg-subtle)]">
+                      {reqLogs.length}
+                    </span>
+                  </span>
+                ),
+              },
+              {
+                value: "system",
+                label: (
+                  <span className="inline-flex w-[6.75rem] items-center justify-between gap-2">
+                    <span>{t("Системные")}</span>
+                    <span className="min-w-[2.5ch] text-right tabular-nums text-[var(--fg-subtle)]">
+                      {appLogs.length}
+                    </span>
+                  </span>
+                ),
+              },
             ]}
           />
           {subTab === "requests" ? (
@@ -110,14 +131,14 @@ export const LogsView: React.FC<LogsViewProps> = ({
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder={t("Модель, аккаунт или текст")}
-              className="w-56"
+              containerClassName="w-56"
             />
           ) : (
             <Select
               value={levelFilter}
               onChange={setLevelFilter}
               ariaLabel={t("Уровень логов")}
-              className="w-32"
+              className="w-56"
               options={[
                 { value: "all", label: t("Все уровни") },
                 { value: "info", label: "Info" },
@@ -130,8 +151,8 @@ export const LogsView: React.FC<LogsViewProps> = ({
           <Button variant="secondary" size="icon" onClick={loadLogs} title={t("Обновить логи")} aria-label={t("Обновить логи")}>
             <RefreshCw className="size-3.5" />
           </Button>
-          <Button variant="ghost" size="icon" onClick={handleClear} title={t("Очистить")} aria-label={t("Очистить логи")}>
-            <Trash2 className="size-3.5" />
+          <Button variant="secondary" size="icon" onClick={handleClear} title={t("Очистить")} aria-label={t("Очистить логи")}>
+            <Trash2 className="size-3.5 text-[var(--fg-muted)]" />
           </Button>
         </PageHeader>
       </div>
@@ -144,14 +165,16 @@ export const LogsView: React.FC<LogsViewProps> = ({
                 <thead>
                   <tr>
                     <th>{t("Время")}</th>
-                    <th>{t("Протокол")}</th>
+                    <th className="hidden xl:table-cell">{t("Протокол")}</th>
                     <th>{t("Аккаунт")}</th>
                     <th>{t("Модель")}</th>
-                    <th>{t("Усилие")}</th>
+                    <th className="hidden lg:table-cell">{t("Усилие")}</th>
                     <th>{t("Статус")}</th>
                     <th className="text-right">{t("Токены")}</th>
-                    <th className="text-right">{t("Задержка")}</th>
-                    <th className="text-right">{t("Стоимость")}</th>
+                    <th className="text-right" title={t("Полное время обработки запроса")}>
+                      {t("Длительность")}
+                    </th>
+                    <th className="hidden text-right xl:table-cell">{t("Стоимость")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -184,10 +207,10 @@ export const LogsView: React.FC<LogsViewProps> = ({
                             <td className="whitespace-nowrap tabular-nums text-[var(--fg-subtle)]">
                               {new Date(r.createdAt).toLocaleTimeString(lang === "ru" ? "ru-RU" : "en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
                             </td>
-                            <td className="whitespace-nowrap text-[11px] text-[var(--fg-muted)]">
+                            <td className="hidden whitespace-nowrap text-[11px] text-[var(--fg-muted)] xl:table-cell">
                               {r.protocol}
                             </td>
-                            <td className="max-w-[150px]">
+                            <td className="max-w-[132px]">
                               {acc.title === "—" ? (
                                 <span className="text-[var(--fg-subtle)]">—</span>
                               ) : (
@@ -213,7 +236,7 @@ export const LogsView: React.FC<LogsViewProps> = ({
                                 </div>
                               )}
                             </td>
-                            <td className="max-w-[170px]">
+                            <td className="max-w-[150px]">
                               <div className="truncate text-[11px] text-[var(--fg)]">
                                 {r.resolvedModel || r.model}
                               </div>
@@ -221,7 +244,7 @@ export const LogsView: React.FC<LogsViewProps> = ({
                                 <div className="truncate text-[11px] text-[var(--fg-subtle)]">{r.model}</div>
                               )}
                             </td>
-                            <td className="whitespace-nowrap text-[11px] text-[var(--fg-muted)]">
+                            <td className="hidden whitespace-nowrap text-[11px] text-[var(--fg-muted)] lg:table-cell">
                               {r.effort || "—"}
                             </td>
                             <td className="whitespace-nowrap">
@@ -251,14 +274,11 @@ export const LogsView: React.FC<LogsViewProps> = ({
                               title={t("вход {input} · выход {output}{cache}", { input: r.inputTokens.toLocaleString(), output: r.outputTokens.toLocaleString(), cache: r.cacheReadTokens > 0 ? ` · ${t("кеш")} ${r.cacheReadTokens.toLocaleString()}` : "" })}
                             >
                               ↑{formatTokens(r.inputTokens)} ↓{formatTokens(r.outputTokens)}
-                              {r.cacheReadTokens > 0 && (
-                                <span className="text-[var(--fg-subtle)]"> · {t("кеш")} {formatTokens(r.cacheReadTokens)}</span>
-                              )}
                             </td>
                             <td className="whitespace-nowrap text-right tabular-nums text-[11px] text-[var(--fg-muted)]">
                               {formatDuration(r.latencyMs)}
                             </td>
-                            <td className="whitespace-nowrap text-right tabular-nums text-[11px]">
+                            <td className="hidden whitespace-nowrap text-right tabular-nums text-[11px] xl:table-cell">
                               {r.costUsd > 0 ? (
                                 <span className="font-medium text-[var(--fg)]">${r.costUsd.toFixed(4)}</span>
                               ) : r.apiEquivalentUsd > 0 ? (
@@ -301,6 +321,12 @@ export const LogsView: React.FC<LogsViewProps> = ({
                                       <div className="text-[11px] text-[var(--fg-subtle)]">{t("Токены")}</div>
                                       <div className="text-[var(--fg)]">
                                         {r.usageSource === "measured" ? t("измерены") : t("оценка")}
+                                      </div>
+                                    </div>
+                                    <div>
+                                      <div className="text-[11px] text-[var(--fg-subtle)]">{t("Кеш прочитан")}</div>
+                                      <div className="text-[var(--fg)]">
+                                        {r.cacheReadTokens > 0 ? r.cacheReadTokens.toLocaleString() : "—"}
                                       </div>
                                     </div>
                                     <div>

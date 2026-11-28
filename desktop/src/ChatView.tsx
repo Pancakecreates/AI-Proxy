@@ -11,7 +11,7 @@ import {
   MessageSquare,
   SlidersHorizontal,
 } from "lucide-react";
-import type { BackendModelEntry, ChatMessageRecord, ChatSummary } from "./types";
+import type { BackendModelEntry, ChatMessageRecord, ChatSummary, ThoughtLevel } from "./types";
 import { BrandIcon } from "./BrandIcon";
 import { Select } from "./Select";
 import { Button, Textarea } from "./components/ui";
@@ -205,6 +205,28 @@ export const ChatView: React.FC<ChatViewProps> = ({
     (m) => m.qualifiedId === modelId || m.gatewayId === modelId || m.nativeId === modelId,
   );
 
+  const THOUGHT_ORDER: ThoughtLevel[] = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+  const supportedEfforts = selectedModelMeta?.supportedEfforts ?? [];
+  const effortLevels = (supportedEfforts.length > 0
+    ? THOUGHT_ORDER.filter((lvl) => supportedEfforts.includes(lvl))
+    : THOUGHT_ORDER) as ThoughtLevel[];
+  const effortLabel = (lvl: ThoughtLevel): string =>
+    ({
+      none: t("Выкл"),
+      minimal: t("Минимальное"),
+      low: t("Низкое"),
+      medium: t("Среднее"),
+      high: t("Высокое"),
+      xhigh: t("Очень высокое"),
+      max: t("Максимум"),
+    })[lvl] ?? lvl;
+
+  useEffect(() => {
+    if (supportedEfforts.length > 0 && !supportedEfforts.includes(effort as ThoughtLevel)) {
+      setEffort(supportedEfforts[supportedEfforts.length - 1] ?? effort);
+    }
+  }, [selectedModelMeta?.qualifiedId]);
+
   return (
     <div className="flex h-full overflow-hidden">
       <aside className="flex w-56 shrink-0 flex-col border-r bg-[var(--sidebar-bg)]">
@@ -235,7 +257,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                   onClick={() => setActiveChatId(c.id)}
                   className={`group flex cursor-pointer items-center justify-between gap-2 rounded-[6px] px-2 py-1.5 transition-colors ${
                     active
-                      ? "bg-[var(--control-active)] text-[var(--fg)] shadow-[inset_0_0_0_1px_var(--border)]"
+                      ? "bg-[var(--nav-active)] text-[var(--fg)]"
                       : "text-[var(--fg-muted)] hover:bg-[var(--bg-subtle)] hover:text-[var(--fg)]"
                   }`}
                 >
@@ -296,15 +318,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             onChange={setEffort}
             ariaLabel={t("Усилие")}
             className="w-40"
-            options={[
-              { value: "none", label: t("Выкл") },
-              { value: "minimal", label: t("Минимальное") },
-              { value: "low", label: t("Низкое") },
-              { value: "medium", label: t("Среднее") },
-              { value: "high", label: t("Высокое") },
-              { value: "xhigh", label: t("Очень высокое") },
-              { value: "max", label: t("Максимум") },
-            ]}
+            options={effortLevels.map((lvl) => ({ value: lvl, label: effortLabel(lvl) }))}
           />
 
           <Select
@@ -349,7 +363,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 <BrandIcon brand={selectedModelMeta?.brand ?? "claude"} size={28} />
                 <div className="text-[13px] font-medium text-[var(--fg)]">{t("Песочница моделей")}</div>
                 <p className="max-w-xs text-[12px] leading-relaxed text-[var(--fg-muted)] text-pretty">
-                  {t("Сообщения сохраняются в локальную SQLite, ответы измеряются по токенам, задержке и стоимости.")}
+                  {t("Сообщения сохраняются в локальную SQLite, ответы измеряются по токенам, времени ответа и стоимости.")}
                 </p>
               </div>
             )}

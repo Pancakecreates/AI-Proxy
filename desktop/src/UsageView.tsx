@@ -108,7 +108,7 @@ export const UsageView: React.FC<UsageViewProps> = ({
           <Stat
             label={t("Точность измерений")}
             value={`${usage?.measuredCount ?? 0} / ${usage?.totalRequests ?? 0}`}
-            sub={t("Средняя задержка {duration}", { duration: formatDuration(usage?.avgLatencyMs ?? 0) })}
+            sub={t("Среднее время ответа {duration}", { duration: formatDuration(usage?.avgLatencyMs ?? 0) })}
           />
         </StatGrid>
 

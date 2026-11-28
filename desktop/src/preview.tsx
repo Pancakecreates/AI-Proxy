@@ -56,7 +56,7 @@ const settings = {
   openaiPort: 8788,
   enableAnthropic: true,
   enableOpenai: true,
-  apiKey: "aipx_51a6761a8deab4136c937f6d06af54040d87090b",
+  apiKey: "aipx_51a6761a8deab4136c937f6d06af54040d87090b", // gitleaks:allow — preview fixture, not a credential
   cwd: "C:\\Users\\Admin\\projects",
   theme: "dark",
   accent: "copper",
@@ -279,7 +279,7 @@ const Sidebar = () => {
             type="button"
             className={`flex h-8 w-full items-center gap-2.5 rounded-[6px] px-2 text-[12.5px] transition-colors ${
               isActive
-                ? "bg-[var(--control-active)] font-medium text-[var(--fg)] shadow-[inset_0_0_0_1px_var(--border)]"
+                ? "bg-[var(--nav-active)] font-medium text-[var(--fg)]"
                 : "text-[var(--fg-muted)] hover:bg-[var(--bg-subtle)] hover:text-[var(--fg)]"
             }`}
           >
@@ -307,7 +307,7 @@ const Sidebar = () => {
       <PreviewPortRow name="OpenAI" port={8788} pathSuffix="/v1" />
       <div className="flex items-center justify-between pt-1 text-[11px] text-[var(--fg-subtle)]">
         <span>{t("Версия")}</span>
-        <span>v0.2.2</span>
+        <span>v0.5.0</span>
       </div>
     </div>
   </nav>
@@ -321,6 +321,9 @@ const content = () => {
         <SettingsView
           settings={settings}
           updateInfo={null}
+          updateDownload={null}
+          onStartUpdateDownload={() => {}}
+          onRestartToUpdate={() => {}}
           onUpdateChecked={() => {}}
           onSave={async () => {}}
           onToggleAutostart={async () => {}}
@@ -379,10 +382,9 @@ const Root = () => {
           <circle cx="18" cy="12" r="2.4" fill="var(--accent)" />
         </svg>
         <span className="text-[12.5px] font-semibold tracking-[-0.01em]">AI Proxy</span>
-        <span className="text-[11px] text-[var(--fg-subtle)]">{t("локальный шлюз")}</span>
       </div>
       <div className="flex h-full items-center gap-1">
-        <span className="mr-1 inline-flex h-6.5 items-center gap-1.5 rounded-[5px] border bg-[var(--bg-elevated)] px-2 text-[11px] font-medium">
+        <span className="mr-1 inline-flex h-6.5 items-center gap-1.5 rounded-[5px] bg-[var(--bg-subtle)] px-2 text-[11px] font-medium">
           <Play className="size-2.5 fill-current" />
           {t("Старт")}
         </span>

@@ -22,6 +22,7 @@ import type {
   RuntimeInstallProgress,
 } from "./types";
 import { BrandIcon } from "./BrandIcon";
+import { Select } from "./Select";
 import { readQuotaCache, refreshQuotas } from "./quotaCache";
 import {
   Button,
@@ -56,6 +57,45 @@ const PROVIDERS_CATALOG = [
   { key: "kimi", name: "Kimi Code", brand: "kimi", enableKey: "enableKimi", pathKey: "kimiPath", downloadable: false, loginable: true },
   { key: "hermes", name: "Hermes", brand: "hermes", enableKey: "enableHermes", pathKey: "hermesPath", downloadable: false, loginable: true },
 ] as const;
+
+const ACP_PRESETS = [
+  {
+    id: "claude-agent",
+    name: "Claude Agent (ACP)",
+    command: "npx",
+    args: "-y @zed-industries/claude-code-acp",
+  },
+  {
+    id: "gemini-cli",
+    name: "Gemini CLI",
+    command: "gemini",
+    args: "--experimental-acp",
+  },
+  {
+    id: "qwen-code",
+    name: "Qwen Code",
+    command: "qwen",
+    args: "--experimental-acp",
+  },
+  {
+    id: "goose",
+    name: "Goose",
+    command: "goose",
+    args: "acp",
+  },
+  {
+    id: "kiro",
+    name: "Kiro CLI",
+    command: "kiro-cli",
+    args: "acp",
+  },
+  {
+    id: "pi",
+    name: "Pi (ACP adapter)",
+    command: "npx",
+    args: "-y pi-acp",
+  },
+];
 
 export const AccountsView: React.FC<AccountsViewProps> = ({
   settings,
@@ -314,17 +354,17 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                       <div className="flex items-center gap-1">
                         {quota?.verificationUrl && (
                           <Button
-                            variant="ghost"
+                            variant="secondary"
                             size="xs"
                             onClick={() => openUrl(quota.verificationUrl!).catch(() => {})}
-                            className="text-[var(--warning)] hover:bg-[var(--warning-soft)]"
+                            className="text-[var(--warning)]"
                           >
                             <ExternalLink className="size-3" />
                             <span>{t("Подтвердить")}</span>
                           </Button>
                         )}
                         <Button
-                          variant="ghost"
+                          variant="secondary"
                           size="xs"
                           onClick={() => handleLogin("antigravity", acc.id)}
                           disabled={busyKey !== null}
@@ -333,13 +373,13 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                           <span>{t("Обновить вход")}</span>
                         </Button>
                         <Button
-                          variant="ghost"
+                          variant="secondary"
                           size="icon"
                           onClick={() => handleRemoveOrLogout("antigravity", acc.id, acc.managed)}
                           disabled={busyKey !== null}
                           title={t("Удалить аккаунт")}
                           aria-label={t("Удалить аккаунт")}
-                          className="size-6 text-[var(--fg-subtle)] hover:text-[var(--danger)]"
+                          className="text-[var(--danger)]"
                         >
                           <Trash2 className="size-3" />
                         </Button>
@@ -395,16 +435,16 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                   </div>
                 </div>
                 <div className="flex items-center gap-1">
-                  <Button variant="ghost" size="xs" onClick={() => handleLogin("codex")} disabled={busyKey !== null}>
+                  <Button variant="secondary" size="xs" onClick={() => handleLogin("codex")} disabled={busyKey !== null}>
                     <LogIn className="size-3" />
                     <span>{t("Войти")}</span>
                   </Button>
                   <Button
-                    variant="ghost"
+                    variant="secondary"
                     size="xs"
                     onClick={() => handleRemoveOrLogout("codex")}
                     disabled={busyKey !== null}
-                    className="hover:text-[var(--danger)]"
+                    className="text-[var(--danger)]"
                   >
                     <LogOut className="size-3" />
                     <span>{t("Выйти")}</span>
@@ -438,6 +478,77 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
               )}
             </Panel>
           ))}
+
+        {quotas
+          .filter((q) => q.provider !== "antigravity" && q.provider !== "codex")
+          .length > 0 && (
+          <Panel className="overflow-hidden">
+            <PanelHeader className="flex-col items-start gap-0.5">
+              <PanelTitle>{t("Лимиты провайдеров")}</PanelTitle>
+              <PanelDescription>
+                {t("Показываем только то, что провайдер реально отдаёт. Если остаток квоты недоступен, честно пишем об этом, а расход токенов остаётся в разделе «Траты».")}
+              </PanelDescription>
+            </PanelHeader>
+            <div className="divide-y">
+              {quotas
+                .filter((q) => q.provider !== "antigravity" && q.provider !== "codex")
+                .map((q) => {
+                  const brand =
+                    q.provider === "devin"
+                      ? "devin"
+                      : q.provider === "grok"
+                        ? "grok"
+                        : q.provider === "copilot"
+                          ? "copilot"
+                          : q.provider === "mistral"
+                            ? "mistral"
+                            : "custom";
+                  return (
+                    <div key={q.accountKey} className="space-y-2 px-4 py-3">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className="flex min-w-0 items-center gap-2.5">
+                          <BrandIcon brand={brand} size={17} />
+                          <div className="min-w-0">
+                            <div className="truncate text-[12px] font-medium text-[var(--fg)]">{q.label}</div>
+                            <div className="truncate text-[11px] text-[var(--fg-subtle)]">
+                              {q.signedIn ? q.email || t("Вход выполнен") : t("Вход не выполнен")}
+                            </div>
+                          </div>
+                        </div>
+                        <span className="text-[11px] text-[var(--fg-subtle)]">
+                          {q.windows.length > 0
+                            ? t("{count} окон лимита", { count: q.windows.length })
+                            : t("нет данных о квоте")}
+                        </span>
+                      </div>
+                      {q.windows.map((w, wi) => (
+                        <div key={wi} className="space-y-2 rounded-[6px] bg-[var(--bg-subtle)] px-3 py-2.5">
+                          <div className="flex items-center justify-between gap-2 text-[11px]">
+                            <span className="truncate font-medium text-[var(--fg)]">{w.label}</span>
+                            <span className="shrink-0 tabular-nums text-[var(--fg-muted)]">
+                              {t("осталось {percent}%", { percent: w.remainingPercent.toFixed(0) })}
+                            </span>
+                          </div>
+                          <div className="progress-track">
+                            <div
+                              className="progress-fill"
+                              style={{ width: `${Math.max(2, Math.min(100, w.remainingPercent))}%` }}
+                            />
+                          </div>
+                        </div>
+                      ))}
+                      {q.error && <div className="text-[11px] text-[var(--fg-muted)]">{t(q.error)}</div>}
+                      {q.windows.length === 0 && !q.error && (
+                        <div className="text-[11px] leading-relaxed text-[var(--fg-subtle)]">
+                          {t("Провайдер не публикует остаток лимитов через CLI. Токены и стоимость запросов видны в «Тратах».")}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+            </div>
+          </Panel>
+        )}
 
         <Panel className="overflow-hidden">
           <PanelHeader className="flex-col items-start gap-0.5">
@@ -482,7 +593,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
 
                     {exe && p.loginable && (
                       <Button
-                        variant="ghost"
+                        variant="secondary"
                         size="xs"
                         onClick={() => handleLogin(p.key)}
                         disabled={busyKey !== null}
@@ -494,13 +605,13 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
 
                     {exe && p.loginable && (
                       <Button
-                        variant="ghost"
+                        variant="secondary"
                         size="icon"
                         onClick={() => handleAddAccount(p.key)}
                         disabled={busyKey !== null}
                         title={t("Добавить аккаунт")}
                         aria-label={t("Добавить аккаунт")}
-                        className="size-6 text-[var(--fg-subtle)] hover:text-[var(--accent)]"
+                        className="text-[var(--accent)]"
                       >
                         <Plus className="size-3.5" />
                       </Button>
@@ -508,13 +619,13 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
 
                     {exe && ["devin", "grok", "codex"].includes(p.key) && accountsForProvider(p.key).length === 0 && (
                       <Button
-                        variant="ghost"
+                        variant="secondary"
                         size="icon"
                         onClick={() => handleRemoveOrLogout(p.key)}
                         disabled={busyKey !== null}
                         title={t("Выйти из аккаунта")}
                         aria-label={t("Выйти из аккаунта")}
-                        className="size-6 text-[var(--fg-subtle)] hover:text-[var(--danger)]"
+                        className="text-[var(--danger)]"
                       >
                         <LogOut className="size-3" />
                       </Button>
@@ -547,7 +658,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                       </div>
                       <div className="flex shrink-0 items-center gap-1">
                         <Button
-                          variant="ghost"
+                          variant="secondary"
                           size="xs"
                           onClick={() => handleLogin(p.key, acc.id)}
                           disabled={busyKey !== null}
@@ -556,13 +667,13 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                           <span>{busy ? t("Вход…") : quota?.signedIn ? t("Обновить") : t("Войти")}</span>
                         </Button>
                         <Button
-                          variant="ghost"
+                          variant="secondary"
                           size="icon"
                           onClick={() => handleRemoveOrLogout(p.key, acc.id, acc.managed)}
                           disabled={busyKey !== null}
                           title={t("Удалить аккаунт")}
                           aria-label={t("Удалить аккаунт")}
-                          className="size-6 text-[var(--fg-subtle)] hover:text-[var(--danger)]"
+                          className="text-[var(--danger)]"
                         >
                           <Trash2 className="size-3" />
                         </Button>
@@ -598,11 +709,11 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                     </div>
                   </div>
                   <Button
-                    variant="ghost"
+                    variant="secondary"
                     size="icon"
                     onClick={() => handleDeleteCustomAcp(c.id)}
                     aria-label={t("Удалить агента")}
-                    className="size-6 text-[var(--fg-subtle)] hover:text-[var(--danger)]"
+                    className="text-[var(--danger)]"
                   >
                     <Trash2 className="size-3.5" />
                   </Button>
@@ -610,6 +721,26 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
               ))}
             </div>
           )}
+
+          <div className="px-4 pt-3">
+            <Select
+              value=""
+              onChange={(id) => {
+                const preset = ACP_PRESETS.find((p) => p.id === id);
+                if (!preset) return;
+                setNewAcpName(preset.name);
+                setNewAcpCmd(preset.command);
+                setNewAcpArgs(preset.args);
+              }}
+              placeholder={t("Добавить из каталога…")}
+              ariaLabel={t("Каталог ACP-агентов")}
+              options={ACP_PRESETS.map((p) => ({
+                value: p.id,
+                label: p.name,
+                hint: `${p.command} ${p.args}`,
+              }))}
+            />
+          </div>
 
           <div className="grid grid-cols-1 gap-2 p-4 md:grid-cols-4">
             <Input
