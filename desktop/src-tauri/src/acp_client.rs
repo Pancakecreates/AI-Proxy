@@ -216,7 +216,11 @@ impl AcpBackend {
             }
         }
         {
-            let proxy = self.settings.read().await.proxy_url.clone();
+            let proxy = {
+                let s = self.settings.read().await;
+                crate::net::resolve_provider_proxy(&self.cfg.key, &s.provider_proxies, s.proxy_url.as_deref())
+                    .map(str::to_string)
+            };
             crate::net::apply_proxy_env(&mut cmd, proxy.as_deref(), &self.cfg.env_overrides);
         }
         #[cfg(target_os = "windows")]

@@ -112,6 +112,7 @@ export interface AppSettings {
   customAcpAgents: CustomAcpAgentConfig[];
   externalProviders: ExternalProviderConfig[];
   proxyUrl: string | null;
+  providerProxies?: Record<string, { mode: ProxyMode; proxyUrl: string | null }>;
   disabledModels: string[];
   flexEnabled: boolean;
 

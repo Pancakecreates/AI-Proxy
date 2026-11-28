@@ -54,6 +54,35 @@ pub fn normalize_base_url(raw: &str) -> Result<String, String> {
     }
 }
 
+
+/// Эффективный прокси для CLI-провайдера по его ключу:
+/// переопределение провайдера (custom/disabled) → глобальный → напрямую.
+pub fn resolve_provider_proxy<'a>(
+    provider_key: &str,
+    overrides: &'a std::collections::HashMap<String, crate::types::ProviderProxyConfig>,
+    global: Option<&'a str>,
+) -> Option<&'a str> {
+    // Точный ключ бэкенда (например antigravity:abc123) имеет приоритет
+    // над общим ключом провайдера (antigravity).
+    let provider_part = provider_key.split(':').next().unwrap_or(provider_key);
+    let cfg = overrides
+        .get(provider_key)
+        .or_else(|| overrides.get(provider_part));
+    match cfg {
+        Some(cfg) => match cfg.mode {
+            crate::types::ProxyMode::Disabled => None,
+            crate::types::ProxyMode::Custom => cfg
+                .proxy_url
+                .as_deref()
+                .map(str::trim)
+                .filter(|u| !u.is_empty())
+                .or_else(|| global.map(str::trim).filter(|u| !u.is_empty())),
+            crate::types::ProxyMode::Inherit => global.map(str::trim).filter(|u| !u.is_empty()),
+        },
+        None => global.map(str::trim).filter(|u| !u.is_empty()),
+    }
+}
+
 /// Проставляет HTTP(S)_PROXY дочернему процессу, если задан глобальный прокси
 /// и пользователь не переопределил эти переменные явно в конфиге бэкенда.
 /// Локальные адреса всегда идут напрямую через NO_PROXY.
@@ -96,5 +125,56 @@ mod tests {
         );
         assert!(normalize_base_url("api.openai.com").is_err());
         assert!(normalize_base_url("  ").is_err());
+    }
+
+    fn proxy_cfg(mode: crate::types::ProxyMode, url: Option<&str>) -> crate::types::ProviderProxyConfig {
+        crate::types::ProviderProxyConfig {
+            mode,
+            proxy_url: url.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn provider_proxy_resolution_priority_chain() {
+        use crate::types::ProxyMode;
+        let global = Some("http://global:8080");
+        let empty: std::collections::HashMap<String, crate::types::ProviderProxyConfig> = Default::default();
+
+        // No override at all -> global
+        assert_eq!(resolve_provider_proxy("devin", &empty, global), global);
+        // No override and no global -> direct
+        assert_eq!(resolve_provider_proxy("devin", &empty, None), None);
+        assert_eq!(resolve_provider_proxy("devin", &empty, Some("  ")), None);
+
+        let mut overrides: std::collections::HashMap<String, crate::types::ProviderProxyConfig> = Default::default();
+        // Inherit explicitly -> still global
+        overrides.insert("devin".into(), proxy_cfg(ProxyMode::Inherit, None));
+        assert_eq!(resolve_provider_proxy("devin", &overrides, global), global);
+
+        // Disabled beats global
+        overrides.insert("devin".into(), proxy_cfg(ProxyMode::Disabled, None));
+        assert_eq!(resolve_provider_proxy("devin", &overrides, global), None);
+
+        // Custom beats global
+        overrides.insert("devin".into(), proxy_cfg(ProxyMode::Custom, Some("http://custom:1080")));
+        assert_eq!(resolve_provider_proxy("devin", &overrides, global), Some("http://custom:1080"));
+
+        // Custom with a blank url is an incomplete override, not intent to go direct:
+        // fall back to global rather than silently bypassing it.
+        overrides.insert("devin".into(), proxy_cfg(ProxyMode::Custom, Some("   ")));
+        assert_eq!(resolve_provider_proxy("devin", &overrides, global), global);
+
+        // Exact account-scoped key beats the provider-wide key
+        overrides.insert("antigravity".into(), proxy_cfg(ProxyMode::Custom, Some("http://provider:1")));
+        overrides.insert("antigravity:acc1".into(), proxy_cfg(ProxyMode::Custom, Some("http://account:2")));
+        assert_eq!(
+            resolve_provider_proxy("antigravity:acc1", &overrides, global),
+            Some("http://account:2")
+        );
+        // Sibling account without its own override uses the provider-wide one
+        assert_eq!(
+            resolve_provider_proxy("antigravity:acc2", &overrides, global),
+            Some("http://provider:1")
+        );
     }
 }

@@ -263,6 +263,18 @@ pub struct ExternalProviderConfig {
     pub max_output_tokens: Option<u32>,
 }
 
+/// Переопределение прокси для конкретного CLI-провайдера.
+/// Inherit — использовать глобальный, Disabled — всегда напрямую,
+/// Custom — свой адрес.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderProxyConfig {
+    #[serde(default)]
+    pub mode: ProxyMode,
+    #[serde(default)]
+    pub proxy_url: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelPricing {
@@ -339,6 +351,10 @@ pub struct AppSettings {
     pub external_providers: Vec<ExternalProviderConfig>,
     #[serde(default)]
     pub proxy_url: Option<String>,
+    /// Прокси-переопределения по ключу провайдера (devin, antigravity, codex, ...).
+    /// Приоритет: переопределение провайдера → глобальный proxy_url → напрямую.
+    #[serde(default)]
+    pub provider_proxies: HashMap<String, ProviderProxyConfig>,
     /// Квалифицированные или gateway-id моделей, скрытых из API прокси.
     #[serde(default)]
     pub disabled_models: Vec<String>,
@@ -417,6 +433,7 @@ impl Default for AppSettings {
             custom_acp_agents: Vec::new(),
             external_providers: Vec::new(),
             proxy_url: None,
+            provider_proxies: HashMap::new(),
             disabled_models: Vec::new(),
             flex_enabled: true,
 

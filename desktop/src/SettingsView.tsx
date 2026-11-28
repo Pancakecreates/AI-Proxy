@@ -13,8 +13,10 @@ import type {
   ShowToolsMode,
   SpeedMode,
   ThoughtLevel,
+  ProxyMode,
 } from "./types";
 import { Select } from "./Select";
+import { BrandIcon } from "./BrandIcon";
 import {
   Button,
   Input,
@@ -47,6 +49,20 @@ const Field: React.FC<{ label: string; children: React.ReactNode; className?: st
     {children}
   </div>
 );
+
+const CLI_PROXY_PROVIDERS: { key: string; label: string; brand: string }[] = [
+  { key: "devin", label: "Devin", brand: "devin" },
+  { key: "antigravity", label: "Antigravity", brand: "gemini" },
+  { key: "opencode", label: "OpenCode", brand: "opencode" },
+  { key: "grok", label: "Grok", brand: "grok" },
+  { key: "codex", label: "Codex", brand: "openai" },
+  { key: "copilot", label: "GitHub Copilot", brand: "copilot" },
+  { key: "cursor", label: "Cursor", brand: "cursor" },
+  { key: "cline", label: "Cline", brand: "cline" },
+  { key: "mistral", label: "Mistral Vibe", brand: "mistral" },
+  { key: "kimi", label: "Kimi", brand: "kimi" },
+  { key: "hermes", label: "Hermes", brand: "hermes" },
+];
 
 export const SettingsView: React.FC<SettingsViewProps> = ({
   settings,
@@ -501,10 +517,75 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               />
             </div>
           </div>
-          <ProxySettingsPanel
-            value={draft.proxyUrl ?? ""}
-            onChange={(v) => setDraft({ ...draft, proxyUrl: v.trim() ? v : null })}
-          />
+        </Panel>
+
+        <Panel className="overflow-hidden">
+          <PanelHeader>
+            <div className="space-y-1">
+              <PanelTitle>{t("Сеть и прокси")}</PanelTitle>
+              <PanelDescription>
+                {t("Глобальный прокси для всех провайдеров. Переопределение для конкретного провайдера имеет приоритет над глобальным; если задано и там и там — используется провайдерское.")}
+              </PanelDescription>
+            </div>
+          </PanelHeader>
+          <div className="space-y-4 p-4">
+            <ProxySettingsPanel
+              value={draft.proxyUrl ?? ""}
+              onChange={(v) => setDraft({ ...draft, proxyUrl: v.trim() ? v : null })}
+            />
+            <div className="border-t pt-3">
+              <div className="mb-2 text-[11px] font-medium text-[var(--fg-muted)]">
+                {t("Переопределения по провайдерам")}
+              </div>
+              <div className="space-y-1.5">
+                {CLI_PROXY_PROVIDERS.map(({ key, label, brand }) => {
+                  const current = draft.providerProxies?.[key];
+                  const mode = current?.mode ?? "inherit";
+                  const setMode = (m: string) => {
+                    const next = { ...(draft.providerProxies ?? {}) };
+                    if (m === "inherit") {
+                      delete next[key];
+                    } else {
+                      next[key] = { mode: m as ProxyMode, proxyUrl: current?.proxyUrl ?? null };
+                    }
+                    setDraft({ ...draft, providerProxies: next });
+                  };
+                  const setUrl = (url: string) => {
+                    const next = { ...(draft.providerProxies ?? {}) };
+                    next[key] = { mode: "custom", proxyUrl: url.trim() ? url.trim() : null };
+                    setDraft({ ...draft, providerProxies: next });
+                  };
+                  return (
+                    <div key={key} className="flex items-center gap-2">
+                      <span className="flex w-36 shrink-0 items-center gap-1.5 text-[12px] text-[var(--fg)]">
+                        <BrandIcon brand={brand} size={14} />
+                        <span className="truncate">{label}</span>
+                      </span>
+                      <Select
+                        value={mode}
+                        onChange={setMode}
+                        ariaLabel={t("Прокси для {label}", { label })}
+                        className="w-40"
+                        options={[
+                          { value: "inherit", label: t("Как глобально") },
+                          { value: "disabled", label: t("Напрямую") },
+                          { value: "custom", label: t("Свой прокси") },
+                        ]}
+                      />
+                      {mode === "custom" && (
+                        <Input
+                          value={current?.proxyUrl ?? ""}
+                          onChange={(e) => setUrl(e.target.value)}
+                          placeholder="http://host:8080"
+                          className="flex-1"
+                        />
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
         </Panel>
       </div>
     </div>

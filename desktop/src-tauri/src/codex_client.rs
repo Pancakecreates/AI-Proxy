@@ -177,7 +177,11 @@ impl CodexBackend {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         {
-            let proxy = self.settings.read().await.proxy_url.clone();
+            let proxy = {
+                let s = self.settings.read().await;
+                crate::net::resolve_provider_proxy("codex", &s.provider_proxies, s.proxy_url.as_deref())
+                    .map(str::to_string)
+            };
             crate::net::apply_proxy_env(&mut cmd, proxy.as_deref(), &std::collections::HashMap::new());
         }
         #[cfg(target_os = "windows")]

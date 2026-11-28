@@ -291,4 +291,10 @@ export const en: Record<string, string> = {
   "сессии": "sessions",
   "сессий": "sessions",
   "точно": "exact",
+  "Сеть и прокси": "Network and proxy",
+  "Глобальный прокси для всех провайдеров. Переопределение для конкретного провайдера имеет приоритет над глобальным; если задано и там и там — используется провайдерское.": "Global proxy for all providers. A per-provider override wins over the global one.",
+  "Переопределения по провайдерам": "Per-provider overrides",
+  "Как глобально": "Same as global",
+  "Свой прокси": "Custom proxy",
+  "Прокси для {label}": "Proxy for {label}",
 };
