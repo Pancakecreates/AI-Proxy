@@ -546,7 +546,8 @@ async fn anthropic_messages_handler(
         let settings_bg = s.clone();
 
         tokio::spawn(async move {
-            let router_fut = state_bg.router.run_turn(unified, Some(tx), None);
+            let cancel_token = crate::cancel::CancelToken::new();
+            let router_fut = state_bg.router.run_turn(unified, Some(tx), Some(cancel_token.clone()));
             tokio::pin!(router_fut);
 
             let mut next_idx = 0usize;
@@ -609,13 +610,17 @@ async fn anthropic_messages_handler(
 
             let turn_result;
             let mut rx_open = true;
+            let mut downstream_open = true;
             loop {
                 tokio::select! {
                     biased;
-                    _ = keepalive.tick() => {
-                        let _ = sse_tx.send(Ok(Event::default().event("ping").data(
-                            json!({ "type": "ping" }).to_string(),
-                        )));
+                    _ = sse_tx.closed(), if downstream_open => {
+                        downstream_open = false;
+                        cancel_token.cancel();
+                    }
+                    res = &mut router_fut => {
+                        turn_result = res;
+                        break;
                     }
                     ev = rx.recv(), if rx_open => {
                         match ev {
@@ -648,9 +653,10 @@ async fn anthropic_messages_handler(
                             None => { rx_open = false; }
                         }
                     }
-                    res = &mut router_fut => {
-                        turn_result = Some(res);
-                        break;
+                    _ = keepalive.tick(), if downstream_open => {
+                        let _ = sse_tx.send(Ok(Event::default().event("ping").data(
+                            json!({ "type": "ping" }).to_string(),
+                        )));
                     }
                 }
             }
@@ -687,7 +693,7 @@ async fn anthropic_messages_handler(
                 }
             }
 
-            match turn_result.unwrap() {
+            match turn_result {
                 Ok(out) => {
                     let res = out.turn;
                     let bkey = out.backend_key;
@@ -951,7 +957,8 @@ async fn openai_chat_handler(
         let settings_bg = s.clone();
 
         tokio::spawn(async move {
-            let router_fut = state_bg.router.run_turn(unified, Some(tx), None);
+            let cancel_token = crate::cancel::CancelToken::new();
+            let router_fut = state_bg.router.run_turn(unified, Some(tx), Some(cancel_token.clone()));
             tokio::pin!(router_fut);
             let mut latest_in = 0u64;
             let mut latest_out = 0u64;
@@ -959,6 +966,7 @@ async fn openai_chat_handler(
             keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             keepalive.tick().await;
             let mut rx_open = true;
+            let mut downstream_open = true;
             let turn_result;
 
             let _ = sse_tx.send(Ok(Event::default().data(
@@ -974,8 +982,13 @@ async fn openai_chat_handler(
             loop {
                 tokio::select! {
                     biased;
-                    _ = keepalive.tick() => {
-                        let _ = sse_tx.send(Ok(Event::default().comment("keepalive")));
+                    _ = sse_tx.closed(), if downstream_open => {
+                        downstream_open = false;
+                        cancel_token.cancel();
+                    }
+                    res = &mut router_fut => {
+                        turn_result = res;
+                        break;
                     }
                     ev = rx.recv(), if rx_open => {
                         match ev {
@@ -1009,9 +1022,8 @@ async fn openai_chat_handler(
                             None => { rx_open = false; }
                         }
                     }
-                    res = &mut router_fut => {
-                        turn_result = Some(res);
-                        break;
+                    _ = keepalive.tick(), if downstream_open => {
+                        let _ = sse_tx.send(Ok(Event::default().comment("keepalive")));
                     }
                 }
             }
@@ -1032,7 +1044,7 @@ async fn openai_chat_handler(
                 }
             }
 
-            match turn_result.unwrap() {
+            match turn_result {
                 Ok(out) => {
                     let res = out.turn;
                     let bkey = out.backend_key;
@@ -1319,7 +1331,8 @@ async fn openai_responses_handler(
                 "part": { "type": "output_text", "text": "", "annotations": [] }
             }));
 
-            let router_fut = state_bg.router.run_turn(unified, Some(tx), None);
+            let cancel_token = crate::cancel::CancelToken::new();
+            let router_fut = state_bg.router.run_turn(unified, Some(tx), Some(cancel_token.clone()));
             tokio::pin!(router_fut);
             let mut latest_in = 0u64;
             let mut latest_out = 0u64;
@@ -1327,13 +1340,19 @@ async fn openai_responses_handler(
             keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             keepalive.tick().await;
             let mut rx_open = true;
+            let mut downstream_open = true;
             let turn_result;
 
             loop {
                 tokio::select! {
                     biased;
-                    _ = keepalive.tick() => {
-                        let _ = sse_tx.send(Ok(Event::default().comment("keepalive")));
+                    _ = sse_tx.closed(), if downstream_open => {
+                        downstream_open = false;
+                        cancel_token.cancel();
+                    }
+                    res = &mut router_fut => {
+                        turn_result = res;
+                        break;
                     }
                     ev = rx.recv(), if rx_open => {
                         match ev {
@@ -1360,9 +1379,8 @@ async fn openai_responses_handler(
                             None => { rx_open = false; }
                         }
                     }
-                    res = &mut router_fut => {
-                        turn_result = Some(res);
-                        break;
+                    _ = keepalive.tick(), if downstream_open => {
+                        let _ = sse_tx.send(Ok(Event::default().comment("keepalive")));
                     }
                 }
             }
@@ -1381,7 +1399,7 @@ async fn openai_responses_handler(
                 }
             }
 
-            match turn_result.unwrap() {
+            match turn_result {
                 Ok(out) => {
                     let res = out.turn;
                     let bkey = out.backend_key;
@@ -1582,6 +1600,230 @@ mod tests {
         assert!(c_json["input_tokens"].as_u64().unwrap() >= 1);
 
         server.abort();
+    }
+
+    struct HangingUpstream {
+        addr: std::net::SocketAddr,
+        disconnects: mpsc::UnboundedReceiver<()>,
+        task: tokio::task::JoinHandle<()>,
+    }
+
+    async fn start_hanging_upstream(continuous: bool) -> HangingUpstream {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (disconnect_tx, disconnects) = mpsc::unbounded_channel::<()>();
+
+        let task = tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let disconnect_tx = disconnect_tx.clone();
+                tokio::spawn(async move {
+                    let mut buf = Vec::with_capacity(4096);
+                    let mut tmp = [0u8; 4096];
+                    let header_end = loop {
+                        match socket.read(&mut tmp).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(n) => {
+                                buf.extend_from_slice(&tmp[..n]);
+                                if let Some(pos) = buf
+                                    .windows(4)
+                                    .position(|w| w == b"\r\n\r\n")
+                                    .map(|p| p + 4)
+                                {
+                                    break pos;
+                                }
+                                if buf.len() > 64 * 1024 {
+                                    return;
+                                }
+                            }
+                        }
+                    };
+
+                    let header = String::from_utf8_lossy(&buf[..header_end]).to_string();
+                    let path = header
+                        .lines()
+                        .next()
+                        .and_then(|line| line.split_whitespace().nth(1))
+                        .unwrap_or("");
+
+                    if path.ends_with("/models") {
+                        let body = r#"{"object":"list","data":[{"id":"slow-model","object":"model","created":0,"owned_by":"test"}]}"#;
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                            body.len(),
+                            body
+                        );
+                        let _ = socket.write_all(response.as_bytes()).await;
+                        return;
+                    }
+
+                    if !path.ends_with("/chat/completions") {
+                        let body = "not found";
+                        let response = format!(
+                            "HTTP/1.1 404 Not Found\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                            body.len(),
+                            body
+                        );
+                        let _ = socket.write_all(response.as_bytes()).await;
+                        return;
+                    }
+
+                    let content_len = header
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            if name.eq_ignore_ascii_case("content-length") {
+                                value.trim().parse::<usize>().ok()
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or(0);
+                    while buf.len() < header_end + content_len {
+                        match socket.read(&mut tmp).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(n) => buf.extend_from_slice(&tmp[..n]),
+                        }
+                    }
+
+                    let sse = concat!(
+                        "data: {\"id\":\"up\",\"object\":\"chat.completion.chunk\",\"created\":0,",
+                        "\"model\":\"slow-model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n\n"
+                    );
+                    let head = "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n";
+                    if socket.write_all(head.as_bytes()).await.is_err() {
+                        return;
+                    }
+                    let first_chunk = format!("{:X}\r\n{}\r\n", sse.len(), sse);
+                    if socket.write_all(first_chunk.as_bytes()).await.is_err() {
+                        return;
+                    }
+                    let _ = socket.flush().await;
+
+                    if continuous {
+                        let mut seq = 0u64;
+                        loop {
+                            seq += 1;
+                            let event = format!(
+                                "data: {{\"id\":\"up\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"slow-model\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":\".{seq}\"}},\"finish_reason\":null}}]}}\n\n"
+                            );
+                            let chunk = format!("{:X}\r\n{}\r\n", event.len(), event);
+                            if socket.write_all(chunk.as_bytes()).await.is_err() {
+                                let _ = disconnect_tx.send(());
+                                return;
+                            }
+                            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+                        }
+                    }
+
+                    loop {
+                        match socket.read(&mut tmp).await {
+                            Ok(0) | Err(_) => {
+                                let _ = disconnect_tx.send(());
+                                return;
+                            }
+                            Ok(_) => {}
+                        }
+                    }
+                });
+            }
+        });
+
+        HangingUpstream {
+            addr,
+            disconnects,
+            task,
+        }
+    }
+
+    #[tokio::test]
+    async fn streaming_client_disconnect_cancels_upstream_turn() {
+        let mut upstream = start_hanging_upstream(true).await;
+
+        let mut s = AppSettings::default();
+        s.api_key = Some("secret-123".into());
+        s.enable_devin = false;
+        s.enable_antigravity = false;
+        s.enable_opencode = false;
+        s.enable_grok = false;
+        s.enable_codex = false;
+        s.enable_copilot = false;
+        s.enable_cursor = false;
+        s.enable_cline = false;
+        s.enable_mistral = false;
+        s.enable_kimi = false;
+        s.enable_hermes = false;
+        s.external_providers = vec![crate::types::ExternalProviderConfig {
+            id: "test".into(),
+            display_name: "Test upstream".into(),
+            base_url: format!("http://{}", upstream.addr),
+            api_key: None,
+            enabled: true,
+            proxy_mode: crate::types::ProxyMode::Disabled,
+            proxy_url: None,
+            extra_headers: Default::default(),
+            max_output_tokens: None,
+        }];
+
+        let settings = Arc::new(RwLock::new(s));
+        let log: LogFn = Arc::new(|_, _, _| {});
+        let router = BackendRouter::new(settings.clone(), log);
+        router.rebuild_backends().await;
+        let models = router.warm_up(true).await;
+        assert!(!models.is_empty(), "test upstream did not expose models");
+        let model = models[0].gateway_id.clone();
+
+        let dir = std::env::temp_dir().join(format!("ai-proxy-http-test-{}", uuid::Uuid::new_v4()));
+        let db = Arc::new(AppDb::open(&dir.join("test.db")).unwrap());
+        let state = HttpSharedState {
+            router,
+            settings,
+            db,
+            on_request_log: None,
+            force_openai: false,
+        };
+        let app = build_http_router(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(format!("http://{addr}/v1/chat/completions"))
+            .header("Authorization", "Bearer secret-123")
+            .json(&json!({
+                "model": model,
+                "messages": [{ "role": "user", "content": "hi" }],
+                "stream": true
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        use futures::StreamExt;
+        let mut stream = resp.bytes_stream();
+        let first = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+            .await
+            .expect("proxy did not emit the first SSE chunk")
+            .expect("SSE stream ended unexpectedly")
+            .unwrap();
+        assert!(!first.is_empty());
+        drop(stream);
+
+        tokio::time::timeout(std::time::Duration::from_secs(4), upstream.disconnects.recv())
+            .await
+            .expect("upstream connection stayed open after the downstream SSE client disconnected")
+            .expect("upstream disconnect channel closed");
+
+        server.abort();
+        upstream.task.abort();
     }
 }
 

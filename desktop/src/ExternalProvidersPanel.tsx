@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { CheckCircle2, AlertCircle, Loader2, Pencil, Plus, Trash2, Globe } from "lucide-react";
 import type { AppSettings, ExternalProviderConfig, ProxyMode } from "./types";
+import { useI18n } from "./i18n";
 import {
   Button,
   Input,
@@ -105,6 +106,7 @@ export const ExternalProvidersPanel: React.FC<ExternalProvidersPanelProps> = ({
   settings,
   onSaveSettings,
 }) => {
+  const { t } = useI18n();
   const providers = settings.externalProviders ?? [];
   const [draft, setDraft] = useState<DraftState | null>(null);
   const [saving, setSaving] = useState(false);
@@ -134,11 +136,11 @@ export const ExternalProvidersPanel: React.FC<ExternalProvidersPanelProps> = ({
   const saveDraft = async () => {
     if (!draft) return;
     if (!draft.displayName.trim()) {
-      setTestError("Укажите название провайдера");
+      setTestError(t("Укажите название провайдера"));
       return;
     }
     if (!draft.baseUrl.trim()) {
-      setTestError("Укажите base URL");
+      setTestError(t("Укажите base URL"));
       return;
     }
     const existing = providers.find((p) => p.id === draft.id);
@@ -176,17 +178,15 @@ export const ExternalProvidersPanel: React.FC<ExternalProvidersPanelProps> = ({
     <Panel>
       <PanelHeader>
         <div>
-          <PanelTitle>Сторонние API</PanelTitle>
+          <PanelTitle>{t("Сторонние API")}</PanelTitle>
           <PanelDescription>
-            OpenAI-совместимые провайдеры по base URL и ключу: OpenRouter, Together, Fireworks,
-            локальные серверы и другие. Их модели появляются в общем каталоге и доступны обоим
-            протоколам прокси.
+            {t("OpenAI-совместимые провайдеры по base URL и ключу: OpenRouter, Together, Fireworks, локальные серверы и другие. Их модели появляются в общем каталоге и доступны обоим протоколам прокси.")}
           </PanelDescription>
         </div>
         {!draft && (
           <Button variant="secondary" size="sm" onClick={() => startEdit()}>
             <Plus size={14} />
-            Добавить
+            {t("Добавить")}
           </Button>
         )}
       </PanelHeader>
@@ -200,8 +200,7 @@ export const ExternalProvidersPanel: React.FC<ExternalProvidersPanelProps> = ({
 
       {providers.length === 0 && !draft && (
         <div className="mt-3 rounded-md border border-dashed border-[var(--border)] px-4 py-6 text-center text-xs text-[var(--fg-muted)]">
-          Нет подключённых провайдеров. Добавьте первый — например, OpenRouter или локальный
-          LM Studio.
+          {t("Нет подключённых провайдеров. Добавьте первый — например, OpenRouter или локальный LM Studio.")}
         </div>
       )}
 
@@ -236,7 +235,7 @@ export const ExternalProvidersPanel: React.FC<ExternalProvidersPanelProps> = ({
         <div className="mt-3 rounded-md border border-[var(--border)] bg-[var(--bg-subtle)] p-4">
           <div className="grid grid-cols-2 gap-3">
             <label className="block">
-              <span className="mb-1 block text-xs text-[var(--fg-muted)]">Название</span>
+              <span className="mb-1 block text-xs text-[var(--fg-muted)]">{t("Название")}</span>
               <Input
                 value={draft.displayName}
                 onChange={(e) => setDraft({ ...draft, displayName: e.target.value })}
@@ -252,7 +251,7 @@ export const ExternalProvidersPanel: React.FC<ExternalProvidersPanelProps> = ({
               />
             </label>
             <label className="col-span-2 block">
-              <span className="mb-1 block text-xs text-[var(--fg-muted)]">API-ключ</span>
+              <span className="mb-1 block text-xs text-[var(--fg-muted)]">{t("API-ключ")}</span>
               <Input
                 type="password"
                 value={draft.apiKey}
@@ -261,14 +260,14 @@ export const ExternalProvidersPanel: React.FC<ExternalProvidersPanelProps> = ({
               />
             </label>
             <div className="col-span-2">
-              <span className="mb-1 block text-xs text-[var(--fg-muted)]">Прокси</span>
+              <span className="mb-1 block text-xs text-[var(--fg-muted)]">{t("Прокси")}</span>
               <Segmented
                 value={draft.proxyMode}
                 onChange={(v) => setDraft({ ...draft, proxyMode: v as ProxyMode })}
                 options={[
-                  { value: "inherit", label: "Как везде" },
-                  { value: "disabled", label: "Напрямую" },
-                  { value: "custom", label: "Свой" },
+                  { value: "inherit", label: t("Как везде") },
+                  { value: "disabled", label: t("Напрямую") },
+                  { value: "custom", label: t("Свой") },
                 ]}
               />
               {draft.proxyMode === "custom" && (
@@ -282,7 +281,7 @@ export const ExternalProvidersPanel: React.FC<ExternalProvidersPanelProps> = ({
             </div>
             <label className="block">
               <span className="mb-1 block text-xs text-[var(--fg-muted)]">
-                Лимит ответа, токены
+                {t("Лимит ответа, токены")}
               </span>
               <NumberInput
                 value={draft.maxOutputTokens ?? 16384}
@@ -294,7 +293,7 @@ export const ExternalProvidersPanel: React.FC<ExternalProvidersPanelProps> = ({
             </label>
             <label className="block">
               <span className="mb-1 block text-xs text-[var(--fg-muted)]">
-                Доп. заголовки <span className="text-[var(--fg-subtle)]">(необязательно)</span>
+                {t("Доп. заголовки")} <span className="text-[var(--fg-subtle)]">{t("(необязательно)")}</span>
               </span>
               <textarea
                 value={draft.extraHeadersText}
@@ -310,7 +309,7 @@ export const ExternalProvidersPanel: React.FC<ExternalProvidersPanelProps> = ({
             <div className="mt-3 flex items-start gap-2 rounded-md border border-[var(--success)] bg-[var(--success-soft)] px-3 py-2 text-xs text-[var(--success)]">
               <CheckCircle2 size={14} className="mt-px shrink-0" />
               <span>
-                Подключение работает: {testResult.modelsCount} моделей за {testResult.latencyMs} мс.
+                {t("Подключение работает: {count} моделей за {latency} мс.", { count: testResult.modelsCount, latency: testResult.latencyMs })}
                 {testResult.sampleModels.length > 0 && (
                   <span className="block mt-0.5 text-[var(--fg-muted)]">
                     {testResult.sampleModels.join(", ")}
@@ -334,14 +333,14 @@ export const ExternalProvidersPanel: React.FC<ExternalProvidersPanelProps> = ({
               onClick={saveDraft}
               disabled={saving || testing}
             >
-              Сохранить
+              {t("Сохранить")}
             </Button>
             <Button variant="secondary" size="sm" onClick={runTest} disabled={testing || saving}>
               {testing && <Loader2 size={13} className="animate-spin" />}
-              Проверить подключение
+              {t("Проверить подключение")}
             </Button>
             <Button variant="ghost" size="sm" onClick={() => setDraft(null)} disabled={saving}>
-              Отмена
+              {t("Отмена")}
             </Button>
           </div>
         </div>
@@ -361,6 +360,7 @@ interface ProxyTestResult {
 }
 
 export const ProxySettingsPanel: React.FC<ProxySettingsPanelProps> = ({ value, onChange }) => {
+  const { t } = useI18n();
   const [testing, setTesting] = useState(false);
   const [result, setResult] = useState<ProxyTestResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -368,7 +368,7 @@ export const ProxySettingsPanel: React.FC<ProxySettingsPanelProps> = ({ value, o
   const test = async () => {
     const url = value.trim();
     if (!url) {
-      setError("Введите адрес прокси для проверки");
+      setError(t("Введите адрес прокси для проверки"));
       setResult(null);
       return;
     }
@@ -390,7 +390,7 @@ export const ProxySettingsPanel: React.FC<ProxySettingsPanelProps> = ({ value, o
       <div className="flex items-end gap-2">
         <label className="flex-1 block">
           <span className="mb-1 block text-xs text-[var(--fg-muted)]">
-            Прокси-сервер <span className="text-[var(--fg-subtle)]">(пусто — напрямую)</span>
+            {t("Прокси-сервер")} <span className="text-[var(--fg-subtle)]">{t("(пусто — напрямую)")}</span>
           </span>
           <Input
             value={value}
@@ -404,18 +404,18 @@ export const ProxySettingsPanel: React.FC<ProxySettingsPanelProps> = ({ value, o
         </label>
         <Button variant="secondary" size="sm" onClick={test} disabled={testing}>
           {testing && <Loader2 size={13} className="animate-spin" />}
-          Проверить
+          {t("Проверить")}
         </Button>
       </div>
       <p className="mt-1.5 text-[11px] text-[var(--fg-subtle)]">
-        HTTP, HTTPS или SOCKS5 для запросов к провайдерам. Локальные адреса всегда идут напрямую.
+        {t("HTTP, HTTPS или SOCKS5 для запросов к провайдерам. Локальные адреса всегда идут напрямую.")}
       </p>
       {result && (
         <div className="mt-2 flex items-start gap-2 rounded-md border border-[var(--success)] bg-[var(--success-soft)] px-3 py-2 text-xs text-[var(--success)]">
           <CheckCircle2 size={14} className="mt-px shrink-0" />
           <span>
-            Прокси работает: ответ за {result.latencyMs} мс
-            {result.externalIp ? `, внешний IP ${result.externalIp}` : ""}.
+            {t("Прокси работает: ответ за {latency} мс", { latency: result.latencyMs })}
+            {result.externalIp ? t(", внешний IP {ip}", { ip: result.externalIp }) : ""}.
           </span>
         </div>
       )}

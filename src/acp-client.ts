@@ -425,8 +425,12 @@ export class AcpClient extends EventEmitter<AcpClientEvents> {
 
   async cancel(sessionId: string): Promise<void> {
     if (!this.isReady) return;
+    const child = this.#proc;
+    if (!child || child.exitCode !== null || !child.stdin.writable) return;
     try {
-      await this.request("session/cancel", { sessionId }, 5_000);
+      // ACP session/cancel is a notification: agents are not required to answer it,
+      // and waiting for an id here can deadlock cancellation cleanup.
+      this.#writeJson(child, { jsonrpc: "2.0", method: "session/cancel", params: { sessionId } });
     } catch {
       // Best-effort cancellation
     }

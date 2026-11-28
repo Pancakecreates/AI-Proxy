@@ -153,6 +153,7 @@ pub enum BackendKind {
     Hermes,
     Custom,
     External,
+    Flex,
 }
 
 impl BackendKind {
@@ -171,6 +172,7 @@ impl BackendKind {
             Self::Hermes => "hermes",
             Self::Custom => "acp",
             Self::External => "external",
+            Self::Flex => "flex",
         }
     }
 }
@@ -340,6 +342,9 @@ pub struct AppSettings {
     /// Квалифицированные или gateway-id моделей, скрытых из API прокси.
     #[serde(default)]
     pub disabled_models: Vec<String>,
+    /// Показывать виртуальную cost-aware модель Flex в каталоге прокси.
+    #[serde(default = "default_true")]
+    pub flex_enabled: bool,
 
     pub model_map: HashMap<String, String>,
     pub custom_pricing: HashMap<String, ModelPricing>,
@@ -413,6 +418,7 @@ impl Default for AppSettings {
             external_providers: Vec::new(),
             proxy_url: None,
             disabled_models: Vec::new(),
+            flex_enabled: true,
 
             model_map: HashMap::new(),
             custom_pricing: HashMap::new(),

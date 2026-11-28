@@ -1,18 +1,21 @@
 use crate::acp_client::{AcpBackend, AcpEndpointConfig, LogFn, StreamSink};
+use crate::cancel::CancelToken;
 use crate::codex_client::CodexBackend;
 use crate::external_client::ExternalBackend;
 use crate::discovery::{merge_antigravity_accounts, resolve_runtime_executable};
 use crate::models::{
     assign_unique_display_names, decode_gateway_model_id, peel_effort_and_speed_suffixes,
 };
+use crate::pricing::{default_api_pricing, estimate_tokens_from_chars, uses_per_token_billing};
 use crate::types::{
     AppSettings, BackendHealthStatus, BackendKind, BackendModelEntry, SpeedMode, ThoughtLevel,
     TurnResult, UnifiedTurnRequest,
 };
 use futures::future::join_all;
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{Mutex, Notify, RwLock};
+use tokio::sync::{Mutex, RwLock};
 
 #[derive(Clone)]
 pub enum BackendInstance {
@@ -75,7 +78,7 @@ impl BackendInstance {
         native_model_id: &str,
         req: &UnifiedTurnRequest,
         sink: Option<StreamSink>,
-        cancel: Option<Arc<Notify>>,
+        cancel: Option<Arc<CancelToken>>,
     ) -> Result<TurnResult, String> {
         match self {
             Self::Acp(a) => a.run_turn(native_model_id, req, sink, cancel).await,
@@ -97,6 +100,155 @@ pub fn is_model_disabled(settings: &AppSettings, m: &BackendModelEntry) -> bool 
     settings.disabled_models.iter().any(|d| {
         d.eq_ignore_ascii_case(&m.qualified_id) || d.eq_ignore_ascii_case(&m.gateway_id)
     })
+}
+
+const FLEX_MODEL_ID: &str = "flex";
+const FLEX_ALT_MODEL_ID: &str = "ai-proxy-flex";
+
+fn is_flex_model_slug(slug: &str) -> bool {
+    slug.eq_ignore_ascii_case(FLEX_MODEL_ID) || slug.eq_ignore_ascii_case(FLEX_ALT_MODEL_ID)
+}
+
+fn flex_catalog_entry(max_input_tokens: u64) -> BackendModelEntry {
+    BackendModelEntry {
+        id: FLEX_MODEL_ID.to_string(),
+        name: "AI Proxy Flex".to_string(),
+        display_name: "AI Proxy Flex".to_string(),
+        gateway_id: FLEX_MODEL_ID.to_string(),
+        supports_images: true,
+        description: "Cost-aware routing across enabled models".to_string(),
+        backend_key: "flex".to_string(),
+        backend_kind: BackendKind::Flex,
+        backend_label: "AI Proxy".to_string(),
+        native_id: FLEX_MODEL_ID.to_string(),
+        qualified_id: FLEX_MODEL_ID.to_string(),
+        brand: "flex".to_string(),
+        max_input_tokens,
+        max_tokens: 16_384,
+        supported_efforts: ThoughtLevel::SCALE.to_vec(),
+        supported_speeds: Vec::new(),
+        is_free: true,
+    }
+}
+
+fn flex_costs(settings: &AppSettings, m: &BackendModelEntry) -> (f64, f64) {
+    let pricing = settings
+        .custom_pricing
+        .get(&m.native_id)
+        .or_else(|| settings.custom_pricing.get(&m.qualified_id))
+        .or_else(|| settings.custom_pricing.get(&m.gateway_id))
+        .cloned()
+        .unwrap_or_else(|| default_api_pricing(&m.native_id));
+    let api_price = (pricing.input_per_1m_usd + pricing.output_per_1m_usd) / 2.0;
+    let effective_cost = if uses_per_token_billing(settings, m.backend_kind, &pricing) {
+        api_price
+    } else if m.is_free {
+        0.0
+    } else {
+        // Subscription CLI accounts are not free capacity, but they do not bill per token.
+        api_price * 0.15
+    };
+    (api_price, effective_cost)
+}
+
+fn flex_tier_rank(level: ThoughtLevel) -> u8 {
+    match level {
+        ThoughtLevel::None | ThoughtLevel::Minimal | ThoughtLevel::Low => 0,
+        ThoughtLevel::Medium => 1,
+        ThoughtLevel::High | ThoughtLevel::Xhigh | ThoughtLevel::Max => 2,
+    }
+}
+
+fn context_bonus(m: &BackendModelEntry) -> f64 {
+    (m.max_input_tokens.max(1) as f64).ln() / 20.0
+}
+
+fn flex_score(settings: &AppSettings, m: &BackendModelEntry, tier: ThoughtLevel, median_api_price: f64) -> f64 {
+    let (api_price, effective_cost) = flex_costs(settings, m);
+    let ctx = context_bonus(m);
+    match flex_tier_rank(tier) {
+        0 => effective_cost * 3.0 + api_price * 0.5 - ctx * 0.2,
+        1 => (api_price - median_api_price).abs() + effective_cost * 0.7 - ctx * 0.1,
+        _ => -api_price + effective_cost * 1.5 - ctx * 0.2,
+    }
+}
+
+fn choose_flex_model(
+    settings: &AppSettings,
+    candidates: &[BackendModelEntry],
+    tier: ThoughtLevel,
+) -> Option<BackendModelEntry> {
+    if candidates.is_empty() {
+        return None;
+    }
+    let mut prices: Vec<f64> = candidates
+        .iter()
+        .map(|m| flex_costs(settings, m).0)
+        .collect();
+    prices.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+    let median = prices.get(prices.len() / 2).copied().unwrap_or(0.0);
+
+    let mut best: Option<(BackendModelEntry, f64)> = None;
+    for candidate in candidates {
+        let score = flex_score(settings, candidate, tier, median);
+        let replace = match &best {
+            None => true,
+            Some((current, current_score)) => {
+                score < *current_score - 0.000_001
+                    || ((score - *current_score).abs() <= 0.000_001
+                        && (candidate.max_input_tokens > current.max_input_tokens
+                            || (candidate.max_input_tokens == current.max_input_tokens
+                                && candidate.qualified_id < current.qualified_id)))
+            }
+        };
+        if replace {
+            best = Some((candidate.clone(), score));
+        }
+    }
+    best.map(|(m, _)| m)
+}
+
+fn flex_candidates(
+    all_models: &[BackendModelEntry],
+    settings: &AppSettings,
+    request: Option<&UnifiedTurnRequest>,
+) -> Vec<BackendModelEntry> {
+    let has_images = request
+        .map(|r| r.messages.iter().any(|m| !m.images.is_empty()))
+        .unwrap_or(false);
+    let prompt_chars = request
+        .map(|r| {
+            r.system.len()
+                + r.messages
+                    .iter()
+                    .map(|m| m.text.len())
+                    .sum::<usize>()
+        })
+        .unwrap_or(0);
+    let needed_tokens = if prompt_chars > 0 {
+        estimate_tokens_from_chars(prompt_chars) + 1_024
+    } else {
+        0
+    };
+
+    let pool: Vec<BackendModelEntry> = all_models
+        .iter()
+        .filter(|m| {
+            m.backend_kind != BackendKind::Flex
+                && !is_model_disabled(settings, m)
+                && (!has_images || m.supports_images)
+        })
+        .cloned()
+        .collect();
+    if needed_tokens == 0 {
+        return pool;
+    }
+    let fitting: Vec<BackendModelEntry> = pool
+        .iter()
+        .filter(|m| m.max_input_tokens >= needed_tokens)
+        .cloned()
+        .collect();
+    if fitting.is_empty() { pool } else { fitting }
 }
 
 pub struct RunTurnOutput {
@@ -491,11 +643,11 @@ impl BackendRouter {
             )));
         }
 
-        for ext in s.external_providers.into_iter().filter(|e| {
-            e.enabled
-                && !e.base_url.trim().is_empty()
-                && e.api_key.as_deref().map(str::trim).is_some_and(|k| !k.is_empty())
-        }) {
+        for ext in s
+            .external_providers
+            .into_iter()
+            .filter(|e| e.enabled && !e.base_url.trim().is_empty())
+        {
             next.push(BackendInstance::External(ExternalBackend::new(
                 ext,
                 self.settings.clone(),
@@ -530,6 +682,15 @@ impl BackendRouter {
         for b in snapshot {
             all.extend(b.list_models().await);
         }
+        let settings = self.settings.read().await.clone();
+        if settings.flex_enabled && !all.is_empty() {
+            let max_input = all
+                .iter()
+                .map(|m| m.max_input_tokens)
+                .max()
+                .unwrap_or(262_144);
+            all.push(flex_catalog_entry(max_input));
+        }
         assign_unique_display_names(&mut all);
         all
     }
@@ -551,9 +712,18 @@ impl BackendRouter {
         total
     }
 
+    #[allow(dead_code)]
     pub async fn resolve_target(
         &self,
         requested_model: Option<&str>,
+    ) -> Result<(BackendInstance, String, Option<ThoughtLevel>, Option<SpeedMode>, String), String> {
+        self.resolve_target_inner(requested_model, None).await
+    }
+
+    async fn resolve_target_inner(
+        &self,
+        requested_model: Option<&str>,
+        request: Option<&UnifiedTurnRequest>,
     ) -> Result<(BackendInstance, String, Option<ThoughtLevel>, Option<SpeedMode>, String), String> {
         if self.list_models().await.is_empty() {
             self.warm_up(false).await;
@@ -597,6 +767,36 @@ impl BackendRouter {
                 .cloned()
                 .ok_or("Нет активных бэкендов")?;
             return Ok((b, s.default_model.clone(), None, None, s.default_model));
+        }
+
+        let flex_slug = decode_gateway_model_id(mapped).unwrap_or_else(|| mapped.to_string());
+        let flex_slug = flex_slug
+            .strip_suffix("[1m]")
+            .or_else(|| flex_slug.strip_suffix("[1M]"))
+            .unwrap_or(&flex_slug)
+            .to_string();
+        let (flex_base, flex_effort, flex_speed) = peel_effort_and_speed_suffixes(&flex_slug);
+        if is_flex_model_slug(&flex_base) {
+            let tier = flex_effort
+                .or_else(|| request.and_then(|r| r.requested_effort))
+                .or(s.thought_level)
+                .unwrap_or(ThoughtLevel::Medium);
+            let pool = flex_candidates(&all_models, &s, request);
+            let choice = choose_flex_model(&s, &pool, tier).ok_or_else(|| {
+                "Flex не нашёл доступных моделей: включите хотя бы одну модель в каталоге.".to_string()
+            })?;
+            let backend = backends
+                .iter()
+                .find(|b| b.key() == choice.backend_key)
+                .cloned()
+                .ok_or_else(|| format!("Flex выбрал «{}», но его бэкенд недоступен", choice.display_name))?;
+            return Ok((
+                backend,
+                choice.native_id.clone(),
+                Some(tier),
+                flex_speed,
+                choice.qualified_id.clone(),
+            ));
         }
 
         let mut candidates = vec![mapped.to_string()];
@@ -656,10 +856,10 @@ impl BackendRouter {
         &self,
         mut req: UnifiedTurnRequest,
         sink: Option<StreamSink>,
-        cancel: Option<Arc<Notify>>,
+        cancel: Option<Arc<CancelToken>>,
     ) -> Result<RunTurnOutput, RunTurnError> {
         let (backend, native_id, hint_effort, hint_speed, resolved_qid) =
-            self.resolve_target(req.model.as_deref()).await?;
+            self.resolve_target_inner(req.model.as_deref(), Some(&req)).await?;
         if req.requested_effort.is_none() {
             req.requested_effort = hint_effort;
         }
@@ -744,5 +944,51 @@ mod tests {
             assert!(result.err().unwrap().contains(requested));
         }
     }
-}
 
+
+    fn flex_test_model(id: &str, backend: BackendKind, free: bool, context: u64) -> BackendModelEntry {
+        BackendModelEntry {
+            id: id.into(),
+            name: id.into(),
+            display_name: id.into(),
+            gateway_id: id.into(),
+            supports_images: true,
+            description: String::new(),
+            backend_key: format!("{backend:?}"),
+            backend_kind: backend,
+            backend_label: format!("{backend:?}"),
+            native_id: id.into(),
+            qualified_id: id.into(),
+            brand: "test".into(),
+            max_input_tokens: context,
+            max_tokens: 8192,
+            supported_efforts: vec![],
+            supported_speeds: vec![],
+            is_free: free,
+        }
+    }
+
+    #[test]
+    fn flex_low_prefers_free_or_cheap_models() {
+        let settings = AppSettings::default();
+        let candidates = vec![
+            flex_test_model("claude-opus-5", BackendKind::Devin, false, 1_000_000),
+            flex_test_model("opencode-go/kimi-k2.5", BackendKind::Opencode, true, 262_144),
+            flex_test_model("expensive-api-model", BackendKind::External, false, 128_000),
+        ];
+        let chosen = choose_flex_model(&settings, &candidates, ThoughtLevel::Low).expect("low choice");
+        assert_eq!(chosen.native_id, "opencode-go/kimi-k2.5");
+    }
+
+    #[test]
+    fn flex_high_prefers_strong_subscription_model_over_paying_twice() {
+        let settings = AppSettings::default();
+        let candidates = vec![
+            flex_test_model("gemini-4-flash", BackendKind::Antigravity, false, 1_000_000),
+            flex_test_model("claude-opus-5", BackendKind::Devin, false, 1_000_000),
+            flex_test_model("small-paid-api", BackendKind::External, false, 128_000),
+        ];
+        let chosen = choose_flex_model(&settings, &candidates, ThoughtLevel::High).expect("high choice");
+        assert_eq!(chosen.native_id, "claude-opus-5");
+    }
+}

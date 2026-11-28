@@ -10,7 +10,9 @@ export type BackendKind =
   | "mistral"
   | "kimi"
   | "hermes"
-  | "custom";
+  | "custom"
+  | "external"
+  | "flex";
 
 export type ThoughtLevel = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 export type SpeedMode = "standard" | "fast" | "ultrafast";
@@ -111,6 +113,7 @@ export interface AppSettings {
   externalProviders: ExternalProviderConfig[];
   proxyUrl: string | null;
   disabledModels: string[];
+  flexEnabled: boolean;
 
   modelMap: Record<string, string>;
   customPricing: Record<string, ModelPricing>;

@@ -1,4 +1,5 @@
 use crate::acp_client::{LogFn, StreamEvent};
+use crate::cancel::CancelToken;
 use crate::db::AppDb;
 use crate::discovery::{app_managed_accounts_dir, detect_all_runtimes, read_antigravity_account_email, resolve_runtime_executable};
 use crate::http_server::{build_http_router, HttpSharedState};
@@ -22,7 +23,7 @@ use std::path::Path;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_autostart::ManagerExt;
-use tokio::sync::{mpsc, oneshot, Mutex, Notify, RwLock};
+use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
 
 pub struct ServerHandle {
     pub shutdown_tx: oneshot::Sender<()>,
@@ -36,7 +37,7 @@ pub struct AppState {
     pub server_handles: Mutex<Vec<ServerHandle>>,
     pub starting: Mutex<bool>,
     pub last_error: RwLock<Option<String>>,
-    pub chat_cancels: Mutex<HashMap<String, Arc<Notify>>>,
+    pub chat_cancels: Mutex<HashMap<String, Arc<CancelToken>>>,
 }
 
 impl AppState {
@@ -690,7 +691,7 @@ pub async fn send_chat_message(
         est_chars += m.content.len();
     }
 
-    let cancel = Arc::new(Notify::new());
+    let cancel = CancelToken::new();
     state.chat_cancels.lock().await.insert(chat_id.clone(), cancel.clone());
 
     let (tx, mut rx) = mpsc::unbounded_channel::<StreamEvent>();
@@ -809,7 +810,7 @@ pub async fn send_chat_message(
 #[tauri::command]
 pub async fn stop_chat_generation(state: State<'_, Arc<AppState>>, chat_id: String) -> Result<(), String> {
     if let Some(n) = state.chat_cancels.lock().await.get(&chat_id).cloned() {
-        n.notify_waiters();
+        n.cancel();
     }
     Ok(())
 }

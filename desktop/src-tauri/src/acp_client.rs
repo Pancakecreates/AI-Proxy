@@ -1,3 +1,4 @@
+use crate::cancel::CancelToken;
 use crate::models::{
     filter_opencode_models, infer_max_input_tokens, infer_model_brand, is_free_opencode_model,
     parse_config_catalog, resolve_speed, resolve_thought_level, to_gateway_model_id,
@@ -14,9 +15,9 @@ use std::collections::{HashMap, HashSet};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, ChildStdin, Command};
-use tokio::sync::{mpsc, oneshot, Mutex, Notify, RwLock};
+use tokio::io::{AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::process::{Child, Command};
+use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
 
 #[derive(Clone)]
 pub enum StreamEvent {
@@ -47,7 +48,7 @@ pub struct AcpEndpointConfig {
 
 struct AcpInner {
     child: Option<Child>,
-    stdin: Option<ChildStdin>,
+    stdin: Option<Box<dyn AsyncWrite + Unpin + Send>>,
     initialized: bool,
 }
 
@@ -233,7 +234,7 @@ impl AcpBackend {
         {
             let mut st = self.proc_state.lock().await;
             st.child = Some(child);
-            st.stdin = Some(stdin);
+            st.stdin = Some(Box::new(stdin));
             st.initialized = false;
         }
 
@@ -545,12 +546,21 @@ impl AcpBackend {
         let _ = self.rpc_request("session/close", params, 5_000).await;
     }
 
+    async fn rpc_notification(&self, method: &str, params: Value) -> Result<(), String> {
+        let line = format!("{}\n", json!({ "jsonrpc": "2.0", "method": method, "params": params }));
+        let mut st = self.proc_state.lock().await;
+        let Some(stdin) = st.stdin.as_mut() else {
+            return Err(format!("{} ACP процесс не запущен", self.cfg.label));
+        };
+        stdin.write_all(line.as_bytes()).await.map_err(|e| e.to_string())
+    }
+
     async fn cancel_session(&self, session_id: &str) {
         if !self.is_ready().await {
             return;
         }
         let _ = self
-            .rpc_request("session/cancel", json!({ "sessionId": session_id }), 5_000)
+            .rpc_notification("session/cancel", json!({ "sessionId": session_id }))
             .await;
     }
 
@@ -740,7 +750,7 @@ impl AcpBackend {
         native_model_id: &str,
         req: &UnifiedTurnRequest,
         sink: Option<StreamSink>,
-        cancel_notify: Option<Arc<Notify>>,
+        cancel_notify: Option<Arc<CancelToken>>,
     ) -> Result<TurnResult, String> {
         if self.models.read().await.is_empty() {
             let _ = self.warm_up(false).await;
@@ -1107,7 +1117,7 @@ impl AcpBackend {
         let prompt_res = if let Some(notify) = cancel_notify {
             tokio::select! {
                 res = prompt_fut => res,
-                _ = notify.notified() => {
+                _ = notify.cancelled() => {
                     self.cancel_session(&sid_clone).await;
                     Err("Запрос отменён пользователем".to_string())
                 }
@@ -1245,5 +1255,285 @@ impl AcpBackend {
         if let Some(mut child) = st.child.take() {
             let _ = child.kill().await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::AsyncReadExt;
+
+    fn test_backend() -> Arc<AcpBackend> {
+        let settings = Arc::new(RwLock::new(AppSettings::default()));
+        let log: LogFn = Arc::new(|_, _, _| {});
+        AcpBackend::new(
+            AcpEndpointConfig {
+                key: "test".into(),
+                kind: BackendKind::Devin,
+                label: "Test ACP".into(),
+                executable: "unused-in-test".into(),
+                args: vec![],
+                env_overrides: HashMap::new(),
+                auth_method_ids: vec![],
+                supports_close_session: false,
+                close_force_meta: false,
+                qualified_prefix: String::new(),
+                description_prefix: String::new(),
+                opencode_filter: None,
+                discovery_cwd: None,
+            },
+            settings,
+            log,
+        )
+    }
+
+    #[tokio::test]
+    async fn cancel_session_sends_acp_notification_without_request_id() {
+        let backend = test_backend();
+        let (writer, mut reader) = tokio::io::duplex(1024);
+        {
+            let mut st = backend.proc_state.lock().await;
+            st.stdin = Some(Box::new(writer));
+            st.initialized = true;
+        }
+
+        let cancel_backend = backend.clone();
+        let cancel_task = tokio::spawn(async move {
+            cancel_backend.cancel_session("sess-1").await;
+        });
+
+        let mut buf = vec![0u8; 1024];
+        let n = tokio::time::timeout(std::time::Duration::from_secs(1), reader.read(&mut buf))
+            .await
+            .expect("cancel frame was not written")
+            .expect("cancel pipe read failed");
+        let frame: Value = serde_json::from_slice(&buf[..n]).expect("cancel frame is not JSON");
+        assert_eq!(frame["method"], "session/cancel");
+        assert_eq!(frame["params"]["sessionId"], "sess-1");
+        assert!(
+            frame.get("id").is_none(),
+            "session/cancel must be an ACP notification, not a request: {frame}"
+        );
+
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(1), cancel_task).await;
+    }
+}
+
+#[cfg(test)]
+mod cancel_integration_tests {
+    use super::*;
+    use crate::types::NormalizedMessage;
+    use std::io::{BufRead as StdBufRead, Write as StdWrite};
+
+    fn write_json_line(stdout: &mut impl StdWrite, value: Value) {
+        let mut line = value.to_string();
+        line.push('\n');
+        let _ = stdout.write_all(line.as_bytes());
+        let _ = stdout.flush();
+    }
+
+    fn write_child_response(stdout: &mut impl StdWrite, id: Value, result: Value) {
+        write_json_line(stdout, json!({ "jsonrpc": "2.0", "id": id, "result": result }));
+    }
+
+    fn append_child_event(path: &str, event: &str) {
+        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            let _ = writeln!(file, "{event}");
+            let _ = file.flush();
+        }
+    }
+
+    /// Вспомогательный вход в тестовом бинарнике: при установленной env-переменной
+    /// процесс работает как минимальный ACP agent поверх stdio.
+    #[test]
+    fn fake_acp_cancel_child() {
+        if std::env::var("AI_PROXY_FAKE_ACP_CHILD").is_err() {
+            return;
+        }
+        let events_path = std::env::var("AI_PROXY_FAKE_ACP_EVENTS").unwrap_or_default();
+        let stdin = std::io::stdin();
+        let mut stdout = std::io::stdout();
+        let mut prompt_id: Option<Value> = None;
+
+        for line in stdin.lock().lines() {
+            let Ok(line) = line else { break };
+            let Ok(msg) = serde_json::from_str::<Value>(&line) else { continue };
+            let method = msg.get("method").and_then(|v| v.as_str());
+            let id = msg.get("id").cloned();
+            match method {
+                Some("initialize") => {
+                    if let Some(id) = id {
+                        write_child_response(&mut stdout, id, json!({ "protocolVersion": 1, "authMethods": [] }));
+                    }
+                }
+                Some("session/new") => {
+                    if let Some(id) = id {
+                        write_child_response(&mut stdout, id, json!({
+                            "sessionId": "fake-session",
+                            "configOptions": [
+                                {
+                                    "id": "model",
+                                    "currentValue": "fake-model",
+                                    "options": [{ "value": "fake-model", "name": "Fake Model" }]
+                                },
+                                {
+                                    "id": "mode",
+                                    "currentValue": "bypass",
+                                    "options": [{ "value": "bypass", "name": "Bypass" }]
+                                }
+                            ]
+                        }));
+                    }
+                }
+                Some("session/set_config_option") => {
+                    if let Some(id) = id {
+                        write_child_response(&mut stdout, id, json!({ "configOptions": [] }));
+                    }
+                }
+                Some("session/prompt") => {
+                    prompt_id = id;
+                    write_json_line(&mut stdout, json!({
+                        "jsonrpc": "2.0",
+                        "method": "session/update",
+                        "params": {
+                            "sessionId": "fake-session",
+                            "update": {
+                                "sessionUpdate": "agent_message_chunk",
+                                "content": { "type": "text", "text": "working" }
+                            }
+                        }
+                    }));
+                }
+                Some("session/cancel") => {
+                    append_child_event(
+                        &events_path,
+                        if id.is_some() { "cancel-request" } else { "cancel-notification" },
+                    );
+                    if let Some(cancel_id) = id {
+                        write_child_response(&mut stdout, cancel_id, json!({}));
+                    }
+                    if let Some(pid) = prompt_id.take() {
+                        write_child_response(&mut stdout, pid, json!({ "stopReason": "cancelled" }));
+                    }
+                }
+                Some("session/close") => {
+                    if let Some(id) = id {
+                        write_child_response(&mut stdout, id, json!({}));
+                    }
+                }
+                _ => {
+                    if let Some(id) = id {
+                        write_child_response(&mut stdout, id, json!({}));
+                    }
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn cancel_token_sends_acp_cancel_notification() {
+        let mut env = HashMap::new();
+        env.insert("AI_PROXY_FAKE_ACP_CHILD".to_string(), Some("1".to_string()));
+        let events_path = std::env::temp_dir()
+            .join(format!("ai-proxy-acp-cancel-{}.log", uuid::Uuid::new_v4()))
+            .to_string_lossy()
+            .to_string();
+        env.insert("AI_PROXY_FAKE_ACP_EVENTS".to_string(), Some(events_path.clone()));
+
+        let exe = std::env::current_exe().expect("current test executable");
+        let cfg = AcpEndpointConfig {
+            key: "fake-acp".into(),
+            kind: BackendKind::Custom,
+            label: "Fake ACP".into(),
+            executable: exe.to_string_lossy().to_string(),
+            args: vec![
+                "--nocapture".into(),
+                "--exact".into(),
+                "acp_client::tests::fake_acp_cancel_child".into(),
+            ],
+            env_overrides: env,
+            auth_method_ids: Vec::new(),
+            supports_close_session: true,
+            close_force_meta: false,
+            qualified_prefix: "fake.".into(),
+            description_prefix: "Fake".into(),
+            opencode_filter: None,
+            discovery_cwd: None,
+        };
+
+        let mut app_settings = AppSettings::default();
+        app_settings.startup_timeout_ms = 5_000;
+        app_settings.request_timeout_ms = 5_000;
+        let settings = Arc::new(RwLock::new(app_settings));
+        let log: LogFn = Arc::new(|_, _, _| {});
+        let backend = AcpBackend::new(cfg, settings, log);
+        backend.models.write().await.push(RawModelEntry {
+            id: "fake-model".into(),
+            name: "Fake Model".into(),
+            supports_images: true,
+            description: None,
+            supported_efforts: Vec::new(),
+            effort_wire_values: HashMap::new(),
+            default_effort: None,
+            supported_speeds: Vec::new(),
+        });
+
+        let (sink, mut stream_rx) = mpsc::unbounded_channel();
+        let cancel = CancelToken::new();
+        let backend_for_turn = backend.clone();
+        let cancel_for_turn = cancel.clone();
+        let turn_task = tokio::spawn(async move {
+            let req = UnifiedTurnRequest {
+                model: Some("fake-model".into()),
+                system: String::new(),
+                messages: vec![NormalizedMessage {
+                    role: "user".into(),
+                    text: "start".into(),
+                    images: Vec::new(),
+                }],
+                requested_effort: None,
+                thinking_disabled: false,
+                thinking_budget: None,
+                requested_speed: None,
+                cwd: Some(std::env::temp_dir().to_string_lossy().to_string()),
+            };
+            backend_for_turn
+                .run_turn("fake-model", &req, Some(sink), Some(cancel_for_turn))
+                .await
+        });
+
+        let first_event = tokio::time::timeout(std::time::Duration::from_secs(5), stream_rx.recv())
+            .await
+            .expect("fake ACP did not start streaming")
+            .expect("stream closed before the first chunk");
+        assert!(matches!(first_event, StreamEvent::Text(ref chunk) if chunk == "working"));
+
+        cancel.cancel();
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut saw_notification = false;
+        while std::time::Instant::now() < deadline {
+            if std::fs::read_to_string(&events_path)
+                .map(|contents| contents.lines().any(|line| line == "cancel-notification"))
+                .unwrap_or(false)
+            {
+                saw_notification = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert!(
+            saw_notification,
+            "ACP cancel must be sent as a JSON-RPC notification (without id); events: {:?}",
+            std::fs::read_to_string(&events_path).unwrap_or_default()
+        );
+
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(5), turn_task)
+            .await
+            .expect("cancelled turn did not finish")
+            .expect("turn task panicked");
+        assert!(outcome.is_err(), "cancelled turn unexpectedly succeeded");
+
+        backend.shutdown().await;
     }
 }

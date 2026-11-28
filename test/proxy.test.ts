@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1062,6 +1062,170 @@ rl.on("line", (line) => {
     assert.equal(res.stopReason, "end_turn");
     assert.equal(res.usage?.outputTokens, 8);
   } finally {
+    await acp.shutdown();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+async function waitForCancelFrames(path: string, timeoutMs = 2_000): Promise<Array<Record<string, unknown>>> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const raw = readFileSync(path, "utf8").trim();
+      if (raw) {
+        return raw.split("\n").filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>);
+      }
+    } catch {
+      // File is created by the fake agent only after cancellation arrives.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error("ACP cancellation frame was not written before the deadline");
+}
+
+test("streaming client disconnect sends ACP session/cancel as a notification", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "acp-cancel-probe-"));
+  const scriptPath = join(dir, "cancel-probe-acp.mjs");
+  const cancelLogPath = join(dir, "cancel-frames.jsonl");
+  writeFileSync(
+    scriptPath,
+    `
+import { createInterface } from "node:readline";
+import { appendFileSync } from "node:fs";
+const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
+const cancelLog = process.env.CANCEL_LOG;
+const pendingPrompts = new Map();
+let nextSess = 1;
+const send = (o) => process.stdout.write(JSON.stringify(o) + "\\n");
+rl.on("line", (line) => {
+  if (!line.trim()) return;
+  const msg = JSON.parse(line);
+  if (msg.method === "initialize") {
+    send({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: 1, agentCapabilities: {} } });
+    return;
+  }
+  if (msg.method === "session/new") {
+    const sid = "cancel-s" + nextSess++;
+    send({
+      jsonrpc: "2.0",
+      id: msg.id,
+      result: {
+        sessionId: sid,
+        configOptions: [
+          { id: "model", category: "model", type: "select", currentValue: "hang-model", options: [{ value: "hang-model", name: "Hang Model" }] },
+          { id: "thought_level", category: "thought_level", type: "select", currentValue: "medium", options: [{ value: "medium", name: "medium" }] }
+        ]
+      }
+    });
+    return;
+  }
+  if (msg.method === "session/set_config_option") {
+    send({ jsonrpc: "2.0", id: msg.id, result: { configOptions: [] } });
+    return;
+  }
+  if (msg.method === "session/prompt") {
+    pendingPrompts.set(msg.params.sessionId, msg.id);
+    send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: msg.params.sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "started" } } } });
+    return;
+  }
+  if (msg.method === "session/cancel") {
+    appendFileSync(cancelLog, JSON.stringify(msg) + "\\n");
+    if (msg.id === undefined) {
+      const promptId = pendingPrompts.get(msg.params.sessionId);
+      if (promptId !== undefined) {
+        send({ jsonrpc: "2.0", id: promptId, result: { stopReason: "cancelled", usage: { inputTokens: 1, outputTokens: 1 } } });
+      }
+    }
+    return;
+  }
+  if (msg.method === "session/close") {
+    send({ jsonrpc: "2.0", id: msg.id, result: {} });
+    return;
+  }
+  if (msg.id !== undefined) {
+    send({ jsonrpc: "2.0", id: msg.id, result: {} });
+  }
+});
+`,
+  );
+
+  const config: ProxyConfig = {
+    help: false,
+    host: "127.0.0.1",
+    port: 0,
+    devinPath: process.execPath,
+    acpArgs: [scriptPath],
+    cwd: dir,
+    mode: "bypass",
+    defaultModel: "hang-model",
+    thoughtLevel: null,
+    speed: null,
+    showTools: "thinking",
+    processModel: "in-process",
+    apiKey: "secret-key",
+    modelMap: {},
+    gatewayAliases: true,
+    requestTimeoutMs: 5_000,
+    startupTimeoutMs: 5_000,
+    idleSessionTtlMs: 60_000,
+    maxSessions: 4,
+    debug: false,
+  };
+
+  const acp = new AcpClient(config, {
+    label: "CancelProbe",
+    executable: process.execPath,
+    args: [scriptPath],
+    env: { CANCEL_LOG: cancelLogPath },
+    supportsCloseSession: false,
+  });
+  const sessions = new SessionManager(acp, config);
+  const server = createProxyServer({ config, acp, sessions });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as AddressInfo;
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const clientAbort = new AbortController();
+
+  try {
+    const response = await fetch(`${baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: { "x-api-key": "secret-key", "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "hang-model",
+        stream: true,
+        messages: [{ role: "user", content: "hang until cancelled" }],
+      }),
+      signal: clientAbort.signal,
+    });
+    assert.equal(response.status, 200);
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let wire = "";
+    const startedDeadline = Date.now() + 2_000;
+    while (!wire.includes("started")) {
+      if (Date.now() > startedDeadline) {
+        throw new Error("fake ACP turn did not start streaming");
+      }
+      const next = await reader.read();
+      if (next.done) break;
+      wire += decoder.decode(next.value, { stream: true });
+    }
+
+    const pendingRead = reader.read();
+    clientAbort.abort();
+    await pendingRead.catch(() => undefined);
+    const frames = await waitForCancelFrames(cancelLogPath);
+    assert.equal(frames[0]?.method, "session/cancel");
+    assert.equal(
+      Object.hasOwn(frames[0] ?? {}, "id"),
+      false,
+      "session/cancel must be a JSON-RPC notification, not a request",
+    );
+  } finally {
+    clientAbort.abort();
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await sessions.closeAll();
     await acp.shutdown();
     rmSync(dir, { recursive: true, force: true });
   }

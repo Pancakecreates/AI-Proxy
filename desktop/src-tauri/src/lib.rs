@@ -1,4 +1,5 @@
 mod acp_client;
+mod cancel;
 mod codex_client;
 mod commands;
 mod db;

@@ -4,14 +4,19 @@ use std::time::Duration;
 /// Собирает reqwest-клиент с явным прокси (или без него).
 /// Пустая строка прокси трактуется как отсутствие прокси.
 pub fn build_client(proxy_url: Option<&str>, timeout: Option<Duration>) -> Result<reqwest::Client, String> {
-    let mut builder = reqwest::Client::builder().user_agent("AI-Proxy-Desktop");
+    // Proxy usage is explicit in this application. In particular, "disabled"
+    // must mean direct even when Windows/VPN software configures a system proxy.
+    let mut builder = reqwest::Client::builder()
+        .user_agent("AI-Proxy-Desktop")
+        .no_proxy();
     if let Some(t) = timeout {
         builder = builder.timeout(t);
     }
     let trimmed = proxy_url.map(str::trim).filter(|u| !u.is_empty());
     if let Some(url) = trimmed {
         let proxy = reqwest::Proxy::all(url)
-            .map_err(|e| format!("Некорректный адрес прокси «{url}»: {e}"))?;
+            .map_err(|e| format!("Некорректный адрес прокси «{url}»: {e}"))?
+            .no_proxy(reqwest::NoProxy::from_string("localhost,127.0.0.1,::1"));
         builder = builder.proxy(proxy);
     }
     builder.build().map_err(|e| format!("Не удалось создать HTTP-клиент: {e}"))
@@ -40,7 +45,7 @@ pub fn normalize_base_url(raw: &str) -> Result<String, String> {
     if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
         return Err(format!("Base URL должен начинаться с http:// или https://: «{trimmed}»"));
     }
-    let without_scheme = trimmed.splitn(2, "://").nth(1).unwrap_or("");
+    let without_scheme = trimmed.split_once("://").map(|(_, rest)| rest).unwrap_or("");
     let has_path = without_scheme.contains('/');
     if has_path {
         Ok(trimmed.to_string())

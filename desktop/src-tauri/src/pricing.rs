@@ -41,17 +41,23 @@ pub fn calculate_costs(
     let eq_usd = (input_tokens as f64 / 1_000_000.0) * pricing.input_per_1m_usd
         + (output_tokens as f64 / 1_000_000.0) * pricing.output_per_1m_usd;
 
-    let pay_per_token = pricing.billable
-        || backend_kind == BackendKind::External
-        || (backend_kind == BackendKind::Grok
-            && settings.xai_api_key.as_deref().map(|s| !s.trim().is_empty()).unwrap_or(false));
-
-    let cost_usd = if pay_per_token { eq_usd } else { 0.0 };
+    let cost_usd = if uses_per_token_billing(settings, backend_kind, &pricing) { eq_usd } else { 0.0 };
     (round_usd(cost_usd), round_usd(eq_usd))
 }
 
 fn round_usd(v: f64) -> f64 {
     (v * 1_000_000.0).round() / 1_000_000.0
+}
+
+pub fn uses_per_token_billing(
+    settings: &AppSettings,
+    backend_kind: BackendKind,
+    pricing: &ModelPricing,
+) -> bool {
+    pricing.billable
+        || backend_kind == BackendKind::External
+        || (backend_kind == BackendKind::Grok
+            && settings.xai_api_key.as_deref().map(|s| !s.trim().is_empty()).unwrap_or(false))
 }
 
 pub fn estimate_tokens_from_chars(chars: usize) -> u64 {

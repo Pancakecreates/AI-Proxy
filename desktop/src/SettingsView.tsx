@@ -178,7 +178,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <Field label={t("Язык")}>
                 <Select
                   value={draft.language || "auto"}
-                  onChange={(v) => setDraft({ ...draft, language: v === "auto" ? "" : v })}
+                  onChange={(v) => setDraft({ ...draft, language: v })}
                   options={[
                     { value: "auto", label: t("Авто") },
                     { value: "ru", label: "Русский" },
@@ -487,7 +487,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 />
               </Field>
             </div>
-            <div className="border-t pt-2">
+            <div className="grid grid-cols-1 gap-x-10 gap-y-0.5 border-t pt-2 sm:grid-cols-2">
+              <Switch
+                checked={draft.flexEnabled ?? true}
+                onCheckedChange={(val) => setDraft({ ...draft, flexEnabled: val })}
+                label={t("Показывать модель Flex")}
+              />
               <Switch
                 checked={draft.debug}
                 onCheckedChange={(val) => setDraft({ ...draft, debug: val })}

@@ -1,4 +1,5 @@
 use crate::acp_client::{LogFn, StreamEvent, StreamSink};
+use crate::cancel::CancelToken;
 use crate::models::{infer_max_input_tokens, infer_model_brand, to_gateway_model_id};
 use crate::net::{build_client, effective_proxy_for, normalize_base_url};
 use crate::types::{
@@ -10,7 +11,7 @@ use serde_json::{json, Value};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{Mutex, Notify, RwLock};
+use tokio::sync::{Mutex, RwLock};
 
 /// Бэкенд стороннего OpenAI-совместимого API: список моделей с /models,
 /// генерация через /chat/completions в потоковом режиме.
@@ -193,7 +194,7 @@ impl ExternalBackend {
         native_model_id: &str,
         req: &UnifiedTurnRequest,
         sink: Option<StreamSink>,
-        cancel: Option<Arc<Notify>>,
+        cancel: Option<Arc<CancelToken>>,
     ) -> Result<TurnResult, String> {
         let base = self.base_url()?;
         let client = self.client().await?;
@@ -245,14 +246,22 @@ impl ExternalBackend {
         body: &Value,
         native_model_id: &str,
         sink: Option<StreamSink>,
-        cancel: Option<Arc<Notify>>,
+        cancel: Option<Arc<CancelToken>>,
     ) -> Result<TurnResult, String> {
         let url = format!("{base}/chat/completions");
-        let resp = self
-            .apply_auth(client.post(&url).json(body))
-            .send()
-            .await
-            .map_err(|e| format!("{e}"))?;
+        if cancel.as_ref().map(|c| c.is_cancelled()).unwrap_or(false) {
+            return Err("Запрос отменён".to_string());
+        }
+        let send_fut = self.apply_auth(client.post(&url).json(body)).send();
+        let resp = if let Some(c) = &cancel {
+            tokio::select! {
+                _ = c.cancelled() => return Err("Запрос отменён".to_string()),
+                r = send_fut => r,
+            }
+        } else {
+            send_fut.await
+        }
+        .map_err(|e| format!("{e}"))?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -280,7 +289,7 @@ impl ExternalBackend {
             let timed = tokio::time::timeout(idle, byte_stream.next());
             let item = if let Some(c) = &cancel {
                 tokio::select! {
-                    _ = c.notified() => return Err("Запрос отменён".to_string()),
+                    _ = c.cancelled() => return Err("Запрос отменён".to_string()),
                     r = timed => r,
                 }
             } else {

@@ -1,4 +1,5 @@
 use crate::acp_client::{hash_system, message_fingerprint, LogFn, StreamEvent, StreamSink};
+use crate::cancel::CancelToken;
 use crate::models::{
     infer_max_input_tokens, normalize_effort_value, resolve_speed, resolve_thought_level,
     to_gateway_model_id,
@@ -15,7 +16,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
-use tokio::sync::{oneshot, Mutex, Notify, RwLock};
+use tokio::sync::{oneshot, Mutex, RwLock};
 
 struct CodexInner {
     child: Option<Child>,
@@ -652,7 +653,7 @@ impl CodexBackend {
         native_model_id: &str,
         req: &UnifiedTurnRequest,
         sink: Option<StreamSink>,
-        cancel_notify: Option<Arc<Notify>>,
+        cancel_notify: Option<Arc<CancelToken>>,
     ) -> Result<TurnResult, String> {
         if self.models.read().await.is_empty() {
             let _ = self.warm_up(false).await;
@@ -875,7 +876,7 @@ impl CodexBackend {
         let outcome = if let Some(notify) = cancel_notify {
             tokio::select! {
                 res = wait_fut => res,
-                _ = notify.notified() => {
+                _ = notify.cancelled() => {
                     let turn_id = self.active_turns.lock().await.get(&thread.thread_id).and_then(|a| a.turn_id.clone());
                     if let Some(tid) = turn_id {
                         let _ = self.rpc_request("turn/interrupt", json!({ "threadId": thread.thread_id, "turnId": tid }), 5_000).await;
