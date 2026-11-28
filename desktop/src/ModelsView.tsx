@@ -94,13 +94,13 @@ export const ModelsView: React.FC<ModelsViewProps> = ({ models, settings, onSave
 
       <div className="page-scroll p-6">
         <Panel className="mx-auto max-w-6xl overflow-hidden">
-          <div className="overflow-x-auto">
+          <div className="max-h-[calc(100dvh-13rem)] overflow-auto">
             <table className="data-table">
               <thead>
                 <tr>
                   <th>{t("Модель")}</th>
                   <th>{t("Провайдер")}</th>
-                  <th>{t("ID для OpenAI и Codex")}</th>
+                  <th>{t("ID для API")}</th>
                   <th className="text-right">{t("Контекст")}</th>
                   <th className="text-right">{t("Действия")}</th>
                 </tr>
@@ -132,44 +132,54 @@ export const ModelsView: React.FC<ModelsViewProps> = ({ models, settings, onSave
                         {m.backendLabel}
                       </td>
                       <td>
-                        <div className="flex items-center gap-1">
-                          <span className="max-w-[220px] truncate text-[11px] text-[var(--fg-muted)]">
-                            {m.qualifiedId}
-                          </span>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => copyId(`q-${m.qualifiedId}`, m.qualifiedId)}
-                            title={t("Скопировать ID для OpenAI и Codex")}
-                            aria-label={t("Скопировать ID для OpenAI и Codex")}
-                            className="size-6 rounded-[4px] text-[var(--fg-subtle)] hover:text-[var(--fg)]"
-                          >
-                            {copiedKey === `q-${m.qualifiedId}` ? (
-                              <Check className="size-3 text-[var(--success)]" />
-                            ) : (
-                              <Copy className="size-3" />
-                            )}
-                          </Button>
+                        <div className="space-y-0.5">
+                          <div className="flex items-center gap-1">
+                            <span className="max-w-[210px] truncate text-[11px] text-[var(--fg-muted)]" title={m.qualifiedId}>
+                              {m.qualifiedId}
+                            </span>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => copyId(`q-${m.qualifiedId}`, m.qualifiedId)}
+                              title={t("Скопировать ID для OpenAI и Codex")}
+                              aria-label={t("Скопировать ID для OpenAI и Codex")}
+                              className="size-5 rounded-[4px] text-[var(--fg-subtle)] hover:text-[var(--fg)]"
+                            >
+                              {copiedKey === `q-${m.qualifiedId}` ? (
+                                <Check className="size-3 text-[var(--success)]" />
+                              ) : (
+                                <Copy className="size-3" />
+                              )}
+                            </Button>
+                          </div>
+                          {m.gatewayId !== m.qualifiedId && (
+                            <div className="flex items-center gap-1">
+                              <span className="max-w-[210px] truncate text-[11px] text-[var(--fg-subtle)]" title={m.gatewayId}>
+                                {m.gatewayId}
+                              </span>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => copyId(`g-${m.qualifiedId}`, m.gatewayId)}
+                                title={t("Скопировать ID для Claude Code")}
+                                aria-label={t("Скопировать ID для Claude Code")}
+                                className="size-5 rounded-[4px] text-[var(--fg-subtle)] hover:text-[var(--fg)]"
+                              >
+                                {copiedKey === `g-${m.qualifiedId}` ? (
+                                  <Check className="size-3 text-[var(--success)]" />
+                                ) : (
+                                  <Copy className="size-3" />
+                                )}
+                              </Button>
+                            </div>
+                          )}
                         </div>
                       </td>
                       <td className="whitespace-nowrap text-right tabular-nums text-[11px] text-[var(--fg-muted)]">
                         {formatTokens(m.maxInputTokens)}
                       </td>
                       <td className="whitespace-nowrap text-right">
-                        <div className="inline-flex items-center gap-1">
-                          <Button
-                            variant="ghost"
-                            size="xs"
-                            onClick={() => copyId(`g-${m.qualifiedId}`, m.gatewayId)}
-                            className="text-[var(--fg-muted)]"
-                          >
-                            {copiedKey === `g-${m.qualifiedId}` ? (
-                              <Check className="size-3 text-[var(--success)]" />
-                            ) : (
-                              <Copy className="size-3" />
-                            )}
-                            <span>Claude ID</span>
-                          </Button>
+                        <div className="inline-flex items-center gap-1.5">
                           <span title={t("Отключённые модели скрыты из API прокси")}>
                             <Switch
                               checked={!isDisabled(m)}

@@ -28,6 +28,7 @@ const BRAND_FILES: Record<string, { src: string; ink?: boolean }> = {
   cursor: { src: "/brands/cursor-icon.svg", ink: true },
   cline: { src: "/brands/cline-icon.svg", ink: true },
   kimi: { src: "/brands/kimi-icon.svg", ink: true },
+  flex: { src: "/brands/flex.svg" },
 };
 
 const FALLBACK_TINTS: Record<string, { bg: string; fg: string }> = {
