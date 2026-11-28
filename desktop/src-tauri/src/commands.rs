@@ -88,7 +88,7 @@ impl AppState {
         }
 
         let result: Result<(), String> = async {
-            self.stop_proxy_internal().await;
+            self.stop_proxy_internal_logged(false).await;
             self.router.rebuild_backends().await;
             let s = self.settings.read().await.clone();
             let mut new_handles = Vec::new();
@@ -201,6 +201,10 @@ impl AppState {
     }
 
     pub async fn stop_proxy_internal(&self) {
+        self.stop_proxy_internal_logged(true).await;
+    }
+
+    pub async fn stop_proxy_internal_logged(&self, log_stop: bool) {
         let handles = {
             let mut g = self.server_handles.lock().await;
             std::mem::take(&mut *g)
@@ -210,7 +214,7 @@ impl AppState {
             let _ = h.shutdown_tx.send(());
         }
         self.router.shutdown().await;
-        if was_running {
+        if was_running && log_stop {
             (self.log)("info", "http", "Прокси остановлен");
         }
     }
